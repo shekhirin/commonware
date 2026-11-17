@@ -9,6 +9,12 @@ use super::group::{
 use crate::bls::variant::{DST, Variant};
 use core::fmt::{Debug, Formatter};
 
+/// The domain separation tag (DST) for the scalar that timelock encryption derives.
+const TLE: DST = b"TLE_BLS12381_XMD:SHA-256_SSWU_RO_H3_";
+
+/// The namespace of the transcripts of a distributed key generation.
+const DKG: &[u8] = b"_COMMONWARE_CRYPTOGRAPHY_BLS12381_DKG";
+
 /// A [Variant] with a public key of type [G1] and a signature of type [G2].
 #[derive(Clone, Hash, PartialEq, Eq)]
 pub struct MinPk {}
@@ -21,6 +27,8 @@ impl Variant for MinPk {
 
     const PROOF_OF_POSSESSION: DST = G2_PROOF_OF_POSSESSION;
     const MESSAGE: DST = G2_MESSAGE;
+    const TLE: DST = TLE;
+    const DKG: &'static [u8] = DKG;
 }
 
 impl Debug for MinPk {
@@ -41,6 +49,8 @@ impl Variant for MinSig {
 
     const PROOF_OF_POSSESSION: DST = G1_PROOF_OF_POSSESSION;
     const MESSAGE: DST = G1_MESSAGE;
+    const TLE: DST = TLE;
+    const DKG: &'static [u8] = DKG;
 }
 
 impl Debug for MinSig {
