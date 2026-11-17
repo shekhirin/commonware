@@ -2414,7 +2414,7 @@ pub mod tests {
                 context.child("test"),
                 db,
                 cache,
-                OrderedVariableP2Db::prefetch_neighbors,
+                OrderedVariableP2Db::prefetch_neighbors::<Digest, Digest>,
             )
             .await;
         });
