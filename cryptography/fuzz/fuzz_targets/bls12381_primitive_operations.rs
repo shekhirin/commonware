@@ -4,11 +4,13 @@ use arbitrary::{Arbitrary, Unstructured};
 use commonware_codec::{Copying, Encode, Read, ReadExt};
 use commonware_cryptography::{
     bls::{
+        key::Private,
         ops,
+        sharing::Share,
         variant::{ScalarReadCfg, Variant},
     },
     bls12381::primitives::{
-        group::{G1, G1_MESSAGE, G2, G2_MESSAGE, Private, Scalar, Share},
+        group::{G1, G1_MESSAGE, G2, G2_MESSAGE, Scalar},
         variant::{MinPk, MinSig},
     },
 };
@@ -72,10 +74,10 @@ enum FuzzOperation {
     // Key operations
     KeypairGeneration,
     ComputePublicKey {
-        private: Private,
+        private: Private<Scalar>,
     },
     SharePublicKey {
-        share: Share,
+        share: Share<Scalar>,
         use_minpk: bool,
     },
 
@@ -92,12 +94,12 @@ enum FuzzOperation {
 
     // Single signature operations (MinPk)
     SignMinPk {
-        private: Private,
+        private: Private<Scalar>,
         namespace: Vec<u8>,
         message: Vec<u8>,
     },
     SignMinPkLowLevel {
-        private: Private,
+        private: Private<Scalar>,
         message: Vec<u8>,
     },
     VerifyMinPk {
@@ -114,12 +116,12 @@ enum FuzzOperation {
 
     // Single signature operations (MinSig)
     SignMinSig {
-        private: Private,
+        private: Private<Scalar>,
         namespace: Vec<u8>,
         message: Vec<u8>,
     },
     SignMinSigLowLevel {
-        private: Private,
+        private: Private<Scalar>,
         message: Vec<u8>,
     },
     VerifyMinSig {
@@ -136,7 +138,7 @@ enum FuzzOperation {
 
     // Proof of possession
     SignProofOfPossessionMinPk {
-        private: Private,
+        private: Private<Scalar>,
         namespace: Vec<u8>,
     },
     VerifyProofOfPossessionMinPk {
@@ -145,7 +147,7 @@ enum FuzzOperation {
         signature: G2,
     },
     SignProofOfPossessionMinSig {
-        private: Private,
+        private: Private<Scalar>,
         namespace: Vec<u8>,
     },
     VerifyProofOfPossessionMinSig {
@@ -349,7 +351,7 @@ fn arbitrary_g2(u: &mut Unstructured) -> Result<G2, arbitrary::Error> {
     }
 }
 
-fn arbitrary_share(u: &mut Unstructured) -> Result<Share, arbitrary::Error> {
+fn arbitrary_share(u: &mut Unstructured) -> Result<Share<Scalar>, arbitrary::Error> {
     Ok(Share::new(
         Participant::new(u.int_in_range(1..=100)?),
         u.arbitrary()?,
