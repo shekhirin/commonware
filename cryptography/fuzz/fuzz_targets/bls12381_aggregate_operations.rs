@@ -1,10 +1,12 @@
 #![no_main]
 
 use arbitrary::{Arbitrary, Unstructured};
-use commonware_cryptography::bls12381::primitives::{
-    group::{G1, G2},
-    ops::aggregate,
-    variant::{MinPk, MinSig},
+use commonware_cryptography::{
+    bls::ops::aggregate,
+    bls12381::primitives::{
+        group::{G1, G2},
+        variant::{MinPk, MinSig},
+    },
 };
 use commonware_parallel::{Rayon, Sequential, rayon::ThreadPoolBuilder};
 use commonware_utils::{NZUsize, iter::NonEmpty, non_empty};

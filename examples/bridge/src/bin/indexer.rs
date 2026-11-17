@@ -15,11 +15,10 @@ use commonware_consensus::{
 };
 use commonware_cryptography::{
     ChaCha20Poly1305, Digest, Hasher, Sha256, Signer as _,
-    bls12381::primitives::{
-        group::G2,
-        variant::{MinSig, Variant},
-    },
-    ed25519::{self, PublicKey},
+    bls::variant::Variant,
+    bls12381::primitives::{group::G2, variant::MinSig},
+    ed25519,
+    ed25519::PublicKey,
     sha256::Digest as Sha256Digest,
 };
 use commonware_formatting::from_hex;
