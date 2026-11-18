@@ -785,7 +785,9 @@ stability_scope!(BETA {
 
         /// Remove a blob from a given partition.
         ///
-        /// If no `name` is provided, the entire partition is removed.
+        /// Removing an absent named blob returns [Error::BlobMissing], including when its
+        /// partition is absent. If no `name` is provided, the entire partition is removed
+        /// and an absent partition returns [Error::PartitionMissing].
         ///
         /// An Ok result indicates the blob is durably removed.
         ///

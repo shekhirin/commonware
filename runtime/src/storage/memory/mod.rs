@@ -215,9 +215,8 @@ impl crate::Storage for Storage {
             Some(name) => {
                 partitions
                     .get_mut(partition)
-                    .ok_or(crate::Error::PartitionMissing(partition.into()))?
-                    .remove(name)
-                    .ok_or(crate::Error::BlobMissing(partition.into(), hex(name)))?;
+                    .and_then(|blobs| blobs.remove(name))
+                    .ok_or_else(|| crate::Error::BlobMissing(partition.into(), hex(name)))?;
                 generations
                     .current
                     .remove(&(partition.to_string(), name.to_vec()));

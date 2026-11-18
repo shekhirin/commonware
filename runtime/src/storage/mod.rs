@@ -94,6 +94,15 @@ stability_scope!(BETA, cfg(not(target_arch = "wasm32")) {
         })
     }
 
+    /// Unlink a named blob. Only an absent path means the blob is missing.
+    fn remove_blob(dir: &Path, partition: &str, name: &[u8]) -> Result<(), Error> {
+        let name = hex(name);
+        std::fs::remove_file(dir.join(&name)).map_err(|e| match e.kind() {
+            io::ErrorKind::NotFound => Error::BlobMissing(partition.into(), name),
+            _ => e.into(),
+        })
+    }
+
     /// Reads a blob's leading bytes and resolves its header (see [header::resolve]).
     pub(crate) fn resolve_header(
         file: &mut File,
@@ -293,6 +302,18 @@ pub(crate) mod tests {
 
         let blobs = storage.scan("partition").await.unwrap();
         assert!(blobs.is_empty(), "Blob was not removed as expected");
+
+        let name = b"test_blob";
+        for partition in ["partition", "absent"] {
+            assert!(matches!(
+                storage.remove(partition, Some(name)).await,
+                Err(Error::BlobMissing(p, n)) if p == partition && n == commonware_formatting::hex(name)
+            ));
+        }
+        assert!(matches!(
+            storage.remove("absent", None).await,
+            Err(Error::PartitionMissing(p)) if p == "absent"
+        ));
     }
 
     /// An already-open handle remains fully readable after the blob is removed by name.
@@ -1311,11 +1332,17 @@ pub(crate) mod tests {
                 storage.remove(&partition, Some(&name)).await.unwrap();
             }
 
-            // The blob is gone, whether or not the host accepted its name.
-            assert!(matches!(
-                storage.remove(&partition, Some(&name)).await,
-                Err(Error::BlobMissing(..))
-            ));
+            // The same missing leaf can fail lookup if a component is too long.
+            let path = dir.join(commonware_formatting::hex(&name));
+            let expected = fs::remove_file(path).unwrap_err();
+            let actual = storage.remove(&partition, Some(&name)).await.unwrap_err();
+            if expected.kind() == std::io::ErrorKind::NotFound {
+                assert!(matches!(actual, Error::BlobMissing(..)));
+            } else {
+                assert!(
+                    matches!(actual, Error::Io(e) if e.raw_os_error() == expected.raw_os_error())
+                );
+            }
             assert!(!is_invalid_name(&storage.remove(&partition, None).await));
         }
     }

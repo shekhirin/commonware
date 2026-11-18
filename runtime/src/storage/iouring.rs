@@ -244,9 +244,7 @@ impl crate::Storage for Storage {
 
         let path = self.storage_directory.join(partition);
         let sync_path = if let Some(name) = name {
-            let blob_path = path.join(hex(name));
-            fs::remove_file(blob_path)
-                .map_err(|_| Error::BlobMissing(partition.into(), hex(name)))?;
+            super::remove_blob(&path, partition, name)?;
 
             &path
         } else {
@@ -2323,6 +2321,10 @@ mod tests {
                 Err(Error::PartitionMissing(_))
             ));
 
+            assert!(matches!(
+                storage.remove("partition", Some(b"blob")).await,
+                Err(Error::Io(e)) if e.kind() == ErrorKind::NotADirectory
+            ));
             assert!(matches!(
                 storage.remove("partition", None).await,
                 Err(Error::Io(_))
