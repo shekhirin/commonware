@@ -828,7 +828,6 @@ impl<S: Scheme, D: Digest> Round<S, D> {
                     !self.decision.is_finalize(),
                     "replayed nullify conflicts with local finalize"
                 );
-                self.decision = Decision::Nullify { retry: None };
             }
             Artifact::Finalize(finalize) => {
                 assert!(
