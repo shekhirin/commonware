@@ -3,7 +3,7 @@ use crate::{
     storage::{
         Generation, Pending, Sender, Tracker,
         hold::{Held, Hold},
-        read_offset,
+        physical_end, physical_range, read_offset,
     },
 };
 use cfg_if::cfg_if;
@@ -619,19 +619,12 @@ impl crate::Blob for Blob {
         options: WriteOptions,
     ) -> Result<(), Error> {
         let bufs = bufs.into();
-        let offset = offset
-            .checked_add(self.data_offset)
+        let range = physical_range(self.data_offset, offset, Widen::widen(bufs.len()))
             .ok_or(Error::OffsetOverflow)?;
-        if !bufs.has_remaining() {
+        if range.is_empty() {
             return Ok(());
         }
-
-        // Validate the signed file extent before recording debt or entering the blocking pool.
-        // Each submission after partial progress then has a representable offset.
-        offset
-            .checked_add(Widen::widen(bufs.len()))
-            .filter(|end| *end <= i64::MAX as u64)
-            .ok_or(Error::OffsetOverflow)?;
+        let offset = range.start;
 
         // Derive per-write policy from the requested options. The blocking worker checks
         // backend support before each hinted submission.
@@ -715,10 +708,8 @@ impl crate::Blob for Blob {
     }
 
     async fn resize(&self, len: u64) -> Result<(), Error> {
+        let len = physical_end(self.data_offset, len).ok_or(Error::OffsetOverflow)?;
         let file = self.shared.clone();
-        let len = len
-            .checked_add(self.data_offset)
-            .ok_or(Error::OffsetOverflow)?;
         self.shared.tracker.write();
         task::spawn_blocking(move || {
             #[cfg(test)]
@@ -2010,14 +2001,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_invalid_write_range_leaves_open_clean() {
+    async fn test_invalid_mutation_extent_leaves_open_clean() {
         // Validate physical extents with both header layouts before any mutation is recorded.
         for (case, layouts) in [Layout::V0..=Layout::V0, Layout::ALL]
             .into_iter()
             .enumerate()
         {
             let (storage, directory) =
-                storage_for_reopen_test(&format!("invalid_write_range_{case}"), layouts);
+                storage_for_reopen_test(&format!("invalid_mutation_extent_{case}"), layouts);
             let (blob, _) = storage.open("partition", b"blob").await.unwrap();
             let header = blob.data_offset;
             let last = i64::MAX as u64;
@@ -2051,6 +2042,13 @@ mod tests {
                     assert!(blob.shared.tracker.failure().is_none());
                 }
             }
+
+            assert!(matches!(
+                blob.resize(last - header + 1).await,
+                Err(Error::OffsetOverflow)
+            ));
+            assert!(!blob.shared.tracker.is_dirty());
+            assert!(blob.shared.tracker.failure().is_none());
 
             // Rejected extents must leave neither flush debt nor a failure for the next open.
             drop(blob);

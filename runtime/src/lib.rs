@@ -933,6 +933,12 @@ stability_scope!(BETA {
     /// requested length cannot fit in a single buffer, or a nonempty range's exclusive
     /// physical end exceeds `i64::MAX`.
     ///
+    /// # Mutation limits
+    ///
+    /// Physical extent validation does not guarantee that a backend can store a blob of that
+    /// size. An in-memory blob also returns [Error::OffsetOverflow] if a write or resize would
+    /// require a length beyond its addressable allocation size.
+    ///
     /// # Concurrency
     ///
     /// A read observes every write and resize that completed before the read began. A read
@@ -999,8 +1005,12 @@ stability_scope!(BETA {
         /// Write every remaining byte in `bufs` to the blob at `offset`.
         ///
         /// The buffers are treated as one logical byte sequence in chunk order.
-        /// If no bytes remain, the write still validates the offset but does not change the
-        /// blob's contents, length, or durability, regardless of the options.
+        /// The physical offset includes the blob's storage prefix. Returns
+        /// [Error::OffsetOverflow] if the physical start overflows `u64` or a nonempty
+        /// write's exclusive physical end exceeds `i64::MAX`.
+        ///
+        /// If no bytes remain, only the physical start is checked. The write does not change
+        /// the blob's contents, length, or durability, regardless of the options.
         fn write_at(
             &self,
             offset: u64,
@@ -1011,7 +1021,10 @@ stability_scope!(BETA {
         /// Resize the blob to the given length.
         ///
         /// If the length is greater than the current length, the blob is extended with zeros.
-        /// If the length is less than the current length, the blob is resized.
+        /// If the length is less than the current length, the blob is truncated.
+        ///
+        /// Returns [Error::OffsetOverflow] if the physical length, including the blob's
+        /// storage prefix, exceeds `i64::MAX`.
         fn resize(&self, len: u64) -> impl Future<Output = Result<(), Error>> + Send;
 
         /// Make every write and resize that completed before this call durable.

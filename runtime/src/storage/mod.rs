@@ -177,15 +177,28 @@ stability_scope!(BETA {
     pub(crate) use crate::BlobLayout as Layout;
     pub(crate) use header::Header;
 
-    /// Resolve a read's physical start. Nonempty ranges must fit a buffer and end within the
-    /// signed file extent. Empty ranges need only a representable start since they issue no I/O.
-    fn read_offset(data_offset: u64, offset: u64, len: usize) -> Option<u64> {
+    /// Resolve an exclusive physical end within the signed file extent.
+    fn physical_end(start: u64, len: u64) -> Option<u64> {
+        start.checked_add(len).filter(|&end| end <= i64::MAX as u64)
+    }
+
+    /// Resolve the physical range for a read or write, including the blob header offset.
+    ///
+    /// Empty ranges issue no I/O and only need their physical start to fit in `u64`.
+    fn physical_range(data_offset: u64, offset: u64, len: u64) -> Option<std::ops::Range<u64>> {
         let start = data_offset.checked_add(offset)?;
+        let end = if len == 0 {
+            start
+        } else {
+            physical_end(start, len)?
+        };
+        Some(start..end)
+    }
+
+    /// Resolve a read's physical start, checking that the requested bytes fit in a buffer.
+    fn read_offset(data_offset: u64, offset: u64, len: usize) -> Option<u64> {
         std::alloc::Layout::array::<u8>(len).ok()?;
-        if len != 0 && start.checked_add(len as u64)? > i64::MAX as u64 {
-            return None;
-        }
-        Some(start)
+        Some(physical_range(data_offset, offset, len as u64)?.start)
     }
 
     /// Validate the names of a namespace operation before it changes the namespace.
@@ -220,12 +233,40 @@ pub(crate) mod shared;
 #[cfg(test)]
 pub(crate) mod tests {
     pub(crate) use super::header::tests::v0_blob_bytes;
+    use super::{Layout, physical_end, physical_range, read_offset};
     use crate::{
         Blob, BlobVersion, Buf, Error, IoBuf, IoBufMut, IoBufs, IoBufsMut, ReadOptions, Spawner,
         Storage, WriteOptions,
     };
     use futures::{FutureExt, TryStreamExt as _};
     use std::{fs, path::Path, sync::Arc};
+
+    #[test]
+    #[allow(deprecated)]
+    fn test_physical_extent_boundaries() {
+        let limit = i64::MAX as u64;
+        for layout in [Layout::V0, Layout::V1] {
+            let header = layout.data_offset();
+            let last = limit - header;
+            assert_eq!(physical_range(header, last - 2, 2), Some(limit - 2..limit));
+            assert_eq!(read_offset(header, last - 2, 2), Some(limit - 2));
+            assert_eq!(physical_range(header, last - 1, 2), None);
+            assert_eq!(read_offset(header, last - 1, 2), None);
+            assert_eq!(physical_end(header, last), Some(limit));
+            assert_eq!(physical_end(header, last + 1), None);
+            assert_eq!(physical_end(header, u64::MAX), None);
+
+            let highest_start = u64::MAX - header;
+            for len in [0, 1] {
+                assert_eq!(physical_range(header, highest_start + 1, len), None);
+            }
+            assert_eq!(
+                physical_range(header, highest_start, 0),
+                Some(u64::MAX..u64::MAX)
+            );
+            assert_eq!(physical_range(header, highest_start, 1), None);
+        }
+    }
 
     /// Runs the full suite of tests on the provided storage implementation.
     pub(crate) async fn run_storage_tests<S>(context: impl Spawner, storage: S)

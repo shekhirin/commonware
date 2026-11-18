@@ -61,10 +61,10 @@
 use super::{
     Generation, Layout, Pending, Sender, Tracker, create_header,
     hold::{Held, Hold},
-    resolve_header, sync_dir,
+    physical_end, physical_range, resolve_header, sync_dir,
 };
 use crate::{
-    BlobVersion, Buf, Error, Handle, IoBufMut, IoBufs, IoBufsMut, ReadOptions, WriteOptions,
+    BlobVersion, Error, Handle, IoBufMut, IoBufs, IoBufsMut, ReadOptions, WriteOptions,
     iouring::{
         operation::{self, Operation},
         request::{
@@ -765,20 +765,12 @@ impl crate::Blob for Blob {
         options: WriteOptions,
     ) -> Result<(), Error> {
         let bufs = bufs.into();
-        let offset = offset
-            .checked_add(self.data_offset)
+        let range = physical_range(self.data_offset, offset, Widen::widen(bufs.len()))
             .ok_or(Error::OffsetOverflow)?;
-
-        if !bufs.has_remaining() {
+        if range.is_empty() {
             return Ok(());
         }
-
-        // Validate the signed file extent before mutation accounting or ring registration.
-        // Each submission after partial progress then avoids the current-position sentinel.
-        offset
-            .checked_add(Widen::widen(bufs.len()))
-            .filter(|end| *end <= i64::MAX as u64)
-            .ok_or(Error::OffsetOverflow)?;
+        let offset = range.start;
 
         let cache = if options.contains(WriteOptions::DONT_CACHE) {
             Cache::Disabled
@@ -833,9 +825,7 @@ impl crate::Blob for Blob {
 
     // TODO: Make this async. See https://github.com/commonwarexyz/monorepo/issues/831
     async fn resize(&self, len: u64) -> Result<(), Error> {
-        let len = len
-            .checked_add(self.data_offset)
-            .ok_or(Error::OffsetOverflow)?;
+        let len = physical_end(self.data_offset, len).ok_or(Error::OffsetOverflow)?;
         self.shared.tracker.write();
         self.shared.file.set_len(len).map_err(|e| {
             let (partition, name) = &self.shared.key;
@@ -888,7 +878,7 @@ impl crate::Blob for Blob {
 mod tests {
     use super::*;
     use crate::{
-        BLOB_PAGE_SIZE, Blob as _, Clock as _, IoBuf, IoBufMut, Runner as _, Spawner as _,
+        BLOB_PAGE_SIZE, Blob as _, Buf, Clock as _, IoBuf, IoBufMut, Runner as _, Spawner as _,
         Storage as _, Supervisor as _,
         buffer::paged::{CHECKSUM_SIZE, CacheRef, Writer},
         iouring::{self, operation::tests::admitted},
@@ -1895,6 +1885,34 @@ mod tests {
             );
 
             let _ = std::fs::remove_dir_all(&storage_directory);
+        });
+    }
+
+    #[test]
+    fn test_invalid_resize_extent_leaves_open_clean() {
+        iouring::Runner::default().start(|_| async {
+            for layout in [Layout::V0, Layout::V1] {
+                let directory = create_test_directory();
+                let storage = Storage::new(Config {
+                    storage_directory: directory.clone(),
+                    blob_layouts: layout..=layout,
+                });
+                let (blob, _) = storage.open("partition", b"overflow").await.unwrap();
+                let completed = storage.pending.completions();
+                assert!(matches!(
+                    blob.resize(i64::MAX as u64 - layout.data_offset() + 1)
+                        .await,
+                    Err(Error::OffsetOverflow)
+                ));
+                assert!(!blob.shared.tracker.is_dirty());
+                assert!(blob.shared.tracker.failure().is_none());
+                drop(blob);
+                let (_, size) = storage.open("partition", b"overflow").await.unwrap();
+                assert_eq!(size, 0);
+                assert_eq!(storage.pending.completions(), completed);
+                drop(storage);
+                std::fs::remove_dir_all(directory).unwrap();
+            }
         });
     }
 
