@@ -981,11 +981,6 @@ impl<
         certificate_sender: &mut WrappedSender<Sr, Certificate<S, D>>,
         staged: Staged<S, D>,
     ) {
-        assert!(
-            self.dirty_section.is_none(),
-            "journal must be synced before broadcast"
-        );
-
         if let Some((certified, notarization)) = staged.certification {
             // Always forward certification outcomes to resolver. This can happen
             // after a nullification for the same view because certification is
@@ -1452,8 +1447,6 @@ impl<
                     // This runs even if there is nothing to broadcast (e.g. a
                     // certification result was recorded) so every artifact is
                     // durable by the end of the iteration that appended it.
-                    self = self.sync_journal().await;
-
                     // Broadcast everything we built (and report it to the application).
                     self.notify(
                         &mut batcher,
@@ -1462,6 +1455,7 @@ impl<
                         &mut certificate_sender,
                         staged,
                     );
+                    self = self.sync_journal().await;
                     self
                 }
                 .instrument(span)
