@@ -83,6 +83,14 @@ pub trait Database: Sized + Send {
     /// The hasher producing [`Self::Digest`].
     type Hasher: commonware_cryptography::Hasher<Digest = Self::Digest>;
 
+    /// Check the configuration against local storage before sync can resize the operations log.
+    fn validate_sync_config(
+        _context: Self::Context,
+        _config: &Self::Config,
+    ) -> impl Future<Output = Result<(), crate::qmdb::Error<Self::Family>>> + Send {
+        std::future::ready(Ok(()))
+    }
+
     /// Build a database from the journal and pinned nodes populated by the sync engine.
     fn from_sync_result(
         context: Self::Context,

@@ -420,35 +420,35 @@ hash = "a93a8033a39ea369a5ed35bad5c1ff45f5f285aae5a6e45548e6c6d431ac09e0"
 
 ["commonware_storage::qmdb::conformance::tests::StorageConformance<CurrentMmbOrderedFixedStorage>"]
 n_cases = 64
-hash = "c0f91c5f70904b1d6ff7339447f830739dd2e7ae36b9b32ab72dd7158a50ce6b"
+hash = "4d09d781a10f78ba0721eff696b9d365a0742be5b0985cc9f9e5e8d8acf25c0d"
 
 ["commonware_storage::qmdb::conformance::tests::StorageConformance<CurrentMmbOrderedVariableStorage>"]
 n_cases = 64
-hash = "05a07c0fcee1c007ce7f3b5e219725929f29d54bf03eabce825b24e9c9d128df"
+hash = "f5e381d3583f2b3d0e5a95a32dd0b686d4376b16383433c48f7e1f68fbdd2b05"
 
 ["commonware_storage::qmdb::conformance::tests::StorageConformance<CurrentMmbUnorderedFixedStorage>"]
 n_cases = 64
-hash = "ad4607ba6d5f708ec9eac8a1d6b503028f0a4f548193a4edd4f142af01196539"
+hash = "9e716649215eaf3c77c9df9113db9a87b7638e38a54f642202e953cab127ba48"
 
 ["commonware_storage::qmdb::conformance::tests::StorageConformance<CurrentMmbUnorderedVariableStorage>"]
 n_cases = 64
-hash = "0560f15c69d29e6896bbb76b1b32c46688d6dbc83f061a80afb71415f2bde284"
+hash = "3a19d0dfd4aafa9ced39fd970e28222789d6cf4c352dfb911df4c1e337368822"
 
 ["commonware_storage::qmdb::conformance::tests::StorageConformance<CurrentMmrOrderedFixedStorage>"]
 n_cases = 64
-hash = "8449da77098f2cb6026a3ed96e29b302173dd932c0f28967728274b45ae8259a"
+hash = "19a60f3cb04b60b924f9ef59806379275457fecfe8af75fb804a23b6cd00f204"
 
 ["commonware_storage::qmdb::conformance::tests::StorageConformance<CurrentMmrOrderedVariableStorage>"]
 n_cases = 64
-hash = "03405bdff545e9d2a9ba2bc0adc4f5c6e4bbf3f4ea19ae8523a82dc3ab57980e"
+hash = "2a3abe6501824e67b3ae798c4978833f7e63597b221eb984514290b9af85a4de"
 
 ["commonware_storage::qmdb::conformance::tests::StorageConformance<CurrentMmrUnorderedFixedStorage>"]
 n_cases = 64
-hash = "4e688e21df5c8bab80dcf8194b4684afb8cddddf8433fabbe37686af19964f2a"
+hash = "fbe3f575dc18ce3bebd861e7f27286429b87a2dfd055815d5a1aa6193fe4a2c4"
 
 ["commonware_storage::qmdb::conformance::tests::StorageConformance<CurrentMmrUnorderedVariableStorage>"]
 n_cases = 64
-hash = "1698aaa7b9c351f78173e8a40da2245fde2778b45bedb76d2bcdbb0e65136a32"
+hash = "5282d42f9e46f2e215f24a0268ff3e413e35f633a212b5dc2ae01f2c24afd48b"
 
 ["commonware_storage::qmdb::conformance::tests::StorageConformance<ImmutableMmbCompactFixedStorage>"]
 n_cases = 64
