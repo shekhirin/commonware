@@ -1,5 +1,6 @@
 //! A storage wrapper that injects deterministic faults for testing crash recovery.
 
+use super::memory;
 use crate::{
     BlobVersion, Error, Handle, IoBufs, IoBufsMut, ReadOptions, WriteOptions,
     deterministic::BoxDynRng,
@@ -115,8 +116,9 @@ pub struct Config {
     /// Failure rate for `open_versioned` operations.
     pub open_rate: Option<Probability>,
 
-    /// Failure rate for nonempty reads. An injected fault takes precedence over the
-    /// underlying blob's range errors.
+    /// Failure rate for nonempty reads. In the deterministic runner, invalid ranges still
+    /// return [Error::OffsetOverflow]. A valid range may return an injected error instead of
+    /// [Error::BlobInsufficientLength].
     pub read_rate: Option<Probability>,
 
     /// Failure and byte-retention configuration for `write_at` operations.
@@ -415,10 +417,12 @@ impl Oracle {
 
 /// A storage wrapper that injects deterministic faults based on configuration.
 ///
-/// Uses a shared RNG for determinism.
+/// Uses a shared RNG for determinism. With arbitrary backends, an injected fault can
+/// take precedence over backend-specific range validation.
 #[derive(Clone)]
 pub struct Storage<S: crate::Storage> {
     inner: S,
+    extent: Option<fn(&S::Blob) -> memory::Extent>,
     ctx: Oracle,
     pending: PendingMutations<S::Blob>,
     generations: FileGenerations,
@@ -429,6 +433,7 @@ impl<S: crate::Storage> Storage<S> {
     pub fn new(inner: S, rng: Arc<Mutex<BoxDynRng>>, config: Arc<RwLock<Config>>) -> Self {
         Self {
             inner,
+            extent: None,
             ctx: Oracle { rng, config },
             pending: Arc::new(Mutex::new(Vec::new())),
             generations: Arc::new(Mutex::new(BTreeMap::new())),
@@ -459,13 +464,16 @@ impl<S: crate::Storage> Storage<S> {
                     generation
                 })
         };
-        Blob::new(
-            self.ctx.clone(),
-            self.pending.clone(),
-            generation,
-            inner,
-            size,
-        )
+        Blob {
+            extent: self.extent.map(|extent| extent(&inner)),
+            ..Blob::new(
+                self.ctx.clone(),
+                self.pending.clone(),
+                generation,
+                inner,
+                size,
+            )
+        }
     }
 
     /// Retires generations and pending mutations for one file or an entire partition.
@@ -501,7 +509,19 @@ impl<S: crate::Storage> Storage<S> {
     }
 }
 
-impl Storage<crate::storage::memory::Storage> {
+impl Storage<memory::Storage> {
+    /// Use the opened blob's physical extent checks before modeling faults.
+    pub(crate) fn new_memory(
+        inner: memory::Storage,
+        rng: Arc<Mutex<BoxDynRng>>,
+        config: Arc<RwLock<Config>>,
+    ) -> Self {
+        Self {
+            extent: Some(memory::Blob::extent),
+            ..Self::new(inner, rng, config)
+        }
+    }
+
     /// Retire crash evidence excluded from the durable snapshot admitted by a successful open.
     /// The caller holds the logical namespace guard through admission and retirement.
     pub(crate) fn admit(
@@ -612,6 +632,7 @@ impl<S: crate::Storage> crate::Storage for Storage<S> {
 /// A blob wrapper that injects deterministic faults based on configuration.
 pub struct Blob<B: crate::Blob> {
     inner: Arc<B>,
+    extent: Option<memory::Extent>,
     ctx: Oracle,
     pending: PendingMutations<B>,
     generation: Arc<FileGeneration>,
@@ -629,6 +650,7 @@ impl<B: crate::Blob> Blob<B> {
     ) -> Self {
         Self {
             inner: Arc::new(inner),
+            extent: None,
             ctx,
             pending,
             generation,
@@ -780,6 +802,9 @@ impl<B: crate::Blob> crate::Blob for Blob<B> {
         options: ReadOptions,
     ) -> Result<IoBufsMut, Error> {
         if len != 0 && self.ctx.should_fail(Op::Read) {
+            if let Some(extent) = self.extent {
+                extent.read_offset(offset, len)?;
+            }
             return Err(injected_io_error().into());
         }
         self.inner.read_at(offset, len, options).await
@@ -793,6 +818,13 @@ impl<B: crate::Blob> crate::Blob for Blob<B> {
         options: ReadOptions,
     ) -> Result<IoBufsMut, Error> {
         if len != 0 && self.ctx.should_fail(Op::Read) {
+            if let Some(extent) = self.extent {
+                assert!(
+                    len <= bufs.into().capacity(),
+                    "read length exceeds buffer capacity"
+                );
+                extent.read_offset(offset, len)?;
+            }
             return Err(injected_io_error().into());
         }
         self.inner
@@ -812,9 +844,13 @@ impl<B: crate::Blob> crate::Blob for Blob<B> {
             return self.inner.write_at(offset, bufs, options).await;
         }
         let sync = options.contains(WriteOptions::SYNC);
-        offset
-            .checked_add(total_bytes)
-            .ok_or(Error::OffsetOverflow)?;
+        if let Some(extent) = self.extent {
+            extent.write_range(offset, total_bytes)?;
+        } else {
+            offset
+                .checked_add(total_bytes)
+                .ok_or(Error::OffsetOverflow)?;
+        }
         let (should_fail, write_retention) = self.ctx.check_write_fault();
         let _mutation = self.generation.mutation.lock().await;
         if should_fail {
@@ -882,6 +918,9 @@ impl<B: crate::Blob> crate::Blob for Blob<B> {
     }
 
     async fn resize(&self, len: u64) -> Result<(), Error> {
+        if let Some(extent) = self.extent {
+            extent.resize_len(len)?;
+        }
         let (should_fail, partial_rate, retain) = self.ctx.check_resize_fault();
         let _mutation = self.generation.mutation.lock().await;
         if should_fail {
