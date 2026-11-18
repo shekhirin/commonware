@@ -1681,7 +1681,8 @@ mod test {
         });
     }
 
-    /// A batched read answers alike whether the page cache serves a position or the log does.
+    /// A batched read answers alike whether the page cache serves a position or the log does,
+    /// and one the page cache serves in full makes no batched read of the log.
     #[test_traced("WARN")]
     fn test_store_get_many_cached_and_uncached() {
         deterministic::Runner::default().start(|context| async move {
@@ -1718,6 +1719,14 @@ mod test {
             assert_eq!(db.get_many(&keys).await.unwrap(), expected);
             let (hits, reads) = (hits() - hits_before, reads() - reads_before);
             assert!(hits > 0 && hits < reads, "hits={hits} reads={reads}");
+
+            // Reading one key leaves its pages in the cache, so reading it again never reaches
+            // the log's batched read.
+            let calls = || counter(&context, "reopened_log_read_many_calls_total");
+            assert_eq!(db.get_many(&keys[..1]).await.unwrap(), expected[..1]);
+            let calls_before = calls();
+            assert_eq!(db.get_many(&keys[..1]).await.unwrap(), expected[..1]);
+            assert_eq!(calls(), calls_before);
 
             db.destroy().await.unwrap();
         });
