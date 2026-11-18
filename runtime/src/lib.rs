@@ -809,7 +809,7 @@ stability_scope!(BETA {
             name: Option<&[u8]>,
         ) -> impl Future<Output = Result<(), Error>> + Send;
 
-        /// Return all blobs in a given partition.
+        /// Return all blob names in a given partition, in unspecified order.
         fn scan(&self, partition: &str)
         -> impl Future<Output = Result<Vec<Vec<u8>>, Error>> + Send;
     }

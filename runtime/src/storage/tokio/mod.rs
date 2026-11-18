@@ -332,15 +332,15 @@ impl crate::Storage for Storage {
             // Distinguish missing partitions from other filesystem failures.
             let entries = fs::read_dir(&path).map_err(|error| match error.kind() {
                 ErrorKind::NotFound => Error::PartitionMissing(partition.clone()),
-                _ => Error::ReadFailed,
+                _ => error.into(),
             })?;
 
             // Make inherited directory entries durable before exposing their blob names.
             partitions.sync_once(&path)?;
             let mut blobs = Vec::new();
             for entry in entries {
-                let entry = entry.map_err(|_| Error::ReadFailed)?;
-                let file_type = entry.file_type().map_err(|_| Error::ReadFailed)?;
+                let entry = entry?;
+                let file_type = entry.file_type()?;
                 if !file_type.is_file() {
                     return Err(Error::PartitionCorrupt(partition));
                 }
@@ -1086,7 +1086,7 @@ mod tests {
 
         assert!(matches!(
             storage.scan("partition").await,
-            Err(Error::ReadFailed)
+            Err(Error::Io(e)) if e.kind() == ErrorKind::NotADirectory
         ));
         assert!(matches!(
             storage.scan("missing").await,
