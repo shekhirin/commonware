@@ -320,6 +320,23 @@ pub(crate) async fn check_kernel_errors<B: crate::Blob>(
         ));
     }
 
+    // A failed data phase keeps its error code. The open becomes dirty without a retained
+    // failure, so a later sync succeeds.
+    assert!(matches!(durability(&full), (false, None)));
+    assert!(matches!(durability(&read_only), (false, None)));
+    io(
+        full.write_at(0, batches(), WriteOptions::SYNC).await,
+        libc::ENOSPC,
+    );
+    assert!(matches!(durability(&full), (true, None)));
+    io(
+        read_only.write_at(0, batches(), WriteOptions::SYNC).await,
+        libc::EBADF,
+    );
+    assert!(matches!(durability(&read_only), (true, None)));
+    read_only.sync().await.unwrap();
+    assert!(durability(&read_only).1.is_none());
+
     // A resize keeps the kernel's error code.
     let result = read_only.resize(1).await;
     assert!(
@@ -337,21 +354,6 @@ pub(crate) async fn check_kernel_errors<B: crate::Blob>(
         full.write_at(0, b"x", WriteOptions::default()).await,
         libc::ENOSPC,
     );
-
-    // A failed data phase keeps its error code. The open stays dirty without a retained
-    // failure, so a later sync succeeds.
-    io(
-        full.write_at(0, batches(), WriteOptions::SYNC).await,
-        libc::ENOSPC,
-    );
-    assert!(matches!(durability(&full), (true, None)));
-    io(
-        read_only.write_at(0, batches(), WriteOptions::SYNC).await,
-        libc::EBADF,
-    );
-    assert!(matches!(durability(&read_only), (true, None)));
-    read_only.sync().await.unwrap();
-    assert!(durability(&read_only).1.is_none());
 
     // A failed fused write keeps its error code and retains it for later syncs.
     io(
