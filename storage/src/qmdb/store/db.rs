@@ -809,7 +809,7 @@ mod test {
                 },
             },
             floor::{Bounded, Hold, Proportional},
-            store::Db,
+            store::{self, Db, partitioned},
         },
         translator::{OneCap, TwoCap},
     };
@@ -850,11 +850,17 @@ mod test {
     /// The type of the store used in tests.
     type TestStore = Db<deterministic::Context, Digest, Vec<u8>, TwoCap, Sequential>;
 
-    /// The configuration type of [TestStore].
-    type TestConfig =
-        Config<TwoCap, <Operation<crate::mmr::Family, Digest, Vec<u8>> as Read>::Cfg, Sequential>;
+    type PartitionedStore =
+        partitioned::Db<deterministic::Context, Digest, Vec<u8>, TwoCap, 1, Sequential>;
 
-    fn test_config() -> TestConfig {
+    type TestConfig<B> = Config<
+        TwoCap,
+        <Operation<crate::mmr::Family, Digest, Vec<u8>> as Read>::Cfg,
+        Sequential,
+        B,
+    >;
+
+    fn test_config<B>(init_concurrency: B) -> TestConfig<B> {
         Config {
             log: JournalConfig {
                 partition: "journal".into(),
@@ -869,12 +875,12 @@ mod test {
             init_cache: Some(NZUsize!(1024)),
             init_buffer: NZUsize!(1 << 21),
             strategy: Sequential,
-            init_concurrency: (),
+            init_concurrency,
         }
     }
 
     async fn create_test_store(context: deterministic::Context) -> TestStore {
-        let cfg = test_config();
+        let cfg = test_config(());
         TestStore::init(context, cfg, None).await.unwrap()
     }
 
@@ -939,7 +945,7 @@ mod test {
         for cap_case in 0..4 {
             deterministic::Runner::default().start(move |context| async move {
                 // Persist two commits with distinct metadata and key state.
-                let cfg = test_config();
+                let cfg = test_config(());
                 let db = TestStore::init(context.child("seed"), cfg.clone(), None)
                     .await
                     .unwrap();
@@ -1029,7 +1035,7 @@ mod test {
     #[test_traced]
     fn test_store_bounded_initialization_rejects_zero() {
         deterministic::Runner::default().start(|context| async move {
-            let cfg = test_config();
+            let cfg = test_config(());
             let db = TestStore::init(context.child("seed"), cfg.clone(), None)
                 .await
                 .unwrap();
@@ -1053,7 +1059,7 @@ mod test {
     fn test_store_bounded_initialization_rejects_pruned_floor() {
         deterministic::Runner::default().start(|context| async move {
             const KEYS: u64 = 64;
-            let cfg = test_config();
+            let cfg = test_config(());
             let mut db = TestStore::init(context.child("seed"), cfg.clone(), None)
                 .await
                 .unwrap();
@@ -1706,15 +1712,6 @@ mod test {
     /// unpartitioned store rebuilds serially.
     #[test_traced("WARN")]
     fn test_store_partitioned_init_matches_serial() {
-        type Partitioned = crate::qmdb::store::partitioned::Db<
-            deterministic::Context,
-            Digest,
-            Vec<u8>,
-            TwoCap,
-            1,
-            Sequential,
-        >;
-
         deterministic::Runner::default().start(|mut context| async move {
             // Seed creates, rewrites, and deletes across several commits so the replay from the
             // floor supersedes and removes keys.
@@ -1745,25 +1742,54 @@ mod test {
             drop(serial);
 
             for concurrency in [1, 2, 3, 4, 8] {
-                let cfg = test_config();
-                let cfg = Config {
-                    log: cfg.log,
-                    translator: cfg.translator,
-                    init_cache: cfg.init_cache,
-                    init_buffer: cfg.init_buffer,
-                    strategy: cfg.strategy,
-                    init_concurrency: NZUsize!(concurrency),
-                };
+                let cfg = test_config(NZUsize!(concurrency));
                 let context = context
                     .child("partitioned")
                     .with_attribute("index", concurrency);
-                let db = Partitioned::init(context, cfg, None).await.unwrap();
+                let db = PartitionedStore::init(context, cfg, None).await.unwrap();
                 assert_eq!(db.active_keys, active_keys);
                 assert_eq!(db.inactivity_floor(), floor);
                 assert_eq!(db.bounds(), bounds);
                 assert_eq!(db.get_many(&keys).await.unwrap(), expected);
                 assert_bitmap_consistent(&db).await;
             }
+        });
+    }
+
+    #[test_traced("WARN")]
+    fn test_store_partitioned_collision_after_reopen() {
+        deterministic::Runner::default().start(|context| async move {
+            // Both keys share the partition byte and the two bytes used by TwoCap.
+            let a = Digest::from([0xab; 32]);
+            let mut b = a;
+            b.0[31] = 1;
+            let keys = [a, b];
+            let db = create_test_store(context.child("seed")).await;
+            let batch: store::Batch<'_, _, _, _, TwoCap, _> = db.new_batch();
+            let changes = batch
+                .write(a, Some(vec![1]))
+                .write(b, Some(vec![2]))
+                .finalize();
+            let db = db.apply_batch(changes).await.unwrap();
+            drop(db.commit().await.unwrap());
+
+            let open = |ctx| PartitionedStore::init(ctx, test_config(NZUsize!(4)), None);
+            let db = open(context.child("partitioned")).await.unwrap();
+            assert_eq!(
+                db.get_many(&keys).await.unwrap(),
+                [Some(vec![1]), Some(vec![2])]
+            );
+            let batch: partitioned::Batch<'_, _, _, _, TwoCap, 1, _> = db.new_batch();
+            let changes = batch.write(a, Some(vec![3])).write(b, None).finalize();
+            let db = db.apply_batch(changes).await.unwrap();
+            let expected = [Some(vec![3]), None];
+            assert_eq!(db.get_many(&keys).await.unwrap(), expected);
+            assert_bitmap_consistent(&db).await;
+            drop(db.commit().await.unwrap());
+
+            let db = open(context.child("reopened")).await.unwrap();
+            assert_eq!(db.get_many(&keys).await.unwrap(), expected);
+            assert_bitmap_consistent(&db).await;
         });
     }
 
@@ -2562,7 +2588,7 @@ mod test {
             type CountedStore =
                 Db<deterministic::Context, Digest, Vec<u8>, CountingTranslator, Sequential>;
             let lookups = Arc::new(AtomicUsize::new(0));
-            let cfg = test_config();
+            let cfg = test_config(());
             let db = CountedStore::init(
                 context,
                 Config {

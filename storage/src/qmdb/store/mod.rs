@@ -81,10 +81,13 @@
 use crate::{index::unordered::Index, merkle::mmr::Location};
 
 mod db;
-pub use db::{Batch, Changeset, Config};
+pub use db::{Changeset, Config};
 
 /// An unauthenticated key-value database based off of an append-only journal of operations.
 pub type Db<E, K, V, T, S> = db::Db<E, K, V, Index<T, Location>, S>;
+
+/// A batch of writes and deletes staged against a [Db].
+pub type Batch<'a, E, K, V, T, S> = db::Batch<'a, E, K, V, Index<T, Location>, S>;
 
 /// Partitioned index variants that divide the key space into `2^(P*8)` partitions and build the
 /// snapshot in parallel at startup.
@@ -104,6 +107,10 @@ pub mod partitioned {
     /// Use partitioned indices when you have a large number of keys (>> 2^(P*8)) and memory
     /// efficiency is important. Keys should be uniformly distributed across the prefix space.
     pub type Db<E, K, V, T, const P: usize, S> = db::Db<E, K, V, Index<T, Location, P>, S>;
+
+    /// A batch of writes and deletes staged against a partitioned [Db].
+    pub type Batch<'a, E, K, V, T, const P: usize, S> =
+        db::Batch<'a, E, K, V, Index<T, Location, P>, S>;
 
     /// Configuration for a [Db], whose `init_concurrency` is the number of snapshot-build tasks.
     pub type Config<T, C, S> = db::Config<T, C, S, NonZeroUsize>;
