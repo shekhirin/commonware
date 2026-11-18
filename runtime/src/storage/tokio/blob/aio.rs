@@ -241,8 +241,7 @@ fn submit(
             // integer address, so it exposes the slab's provenance.
             aio_buf: Widen::widen(unsafe { slab_ptr.add(start) }.expose_provenance()),
             aio_nbytes: Widen::widen(aligned_len),
-            // An offset past the largest signed file offset wraps negative. The kernel
-            // rejects it at submission and the read is served positioned.
+            // Rounding down the validated range's start keeps the offset representable.
             aio_offset: aligned_offset as i64,
             ..Iocb::default()
         })
@@ -410,7 +409,7 @@ pub(super) fn read_many(
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
     let mut reads = Vec::with_capacity(ranges.len());
     for (index, &(offset, len)) in ranges.iter().enumerate() {
-        let Some(offset) = physical_offset(data_offset, offset, len) else {
+        let Some(offset) = read_offset(data_offset, offset, len) else {
             return stream::iter(vec![Err(Error::OffsetOverflow)]).boxed();
         };
         if len == 0 {

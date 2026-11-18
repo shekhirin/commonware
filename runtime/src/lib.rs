@@ -925,8 +925,11 @@ stability_scope!(BETA {
     /// Reads are exact. If the end of the blob is reached before a range is filled, the
     /// read fails with [Error::BlobInsufficientLength]. A zero-length range reads no bytes
     /// and is valid even past the end of the blob.
-    /// A range the backend cannot address can fail before reaching EOF, for example
-    /// with [Error::OffsetOverflow].
+    ///
+    /// The physical offset includes any storage prefix before the blob's data. Range
+    /// validation returns [Error::OffsetOverflow] if this offset overflows `u64`, the
+    /// requested length cannot fit in a single buffer, or a nonempty range's exclusive
+    /// physical end exceeds `i64::MAX`.
     ///
     /// # Concurrency
     ///
@@ -966,7 +969,8 @@ stability_scope!(BETA {
         ///
         /// Without an error, every range is yielded exactly once. An error need not identify the
         /// ranges it affects, and those ranges may never be yielded, so treat any error as failing
-        /// the call. Reads may begin before the stream is polled and continue after it is dropped.
+        /// the call. If several ranges fail, any of their errors can be reported first.
+        /// Reads may begin before the stream is polled and continue after it is dropped.
         fn read_many(
             &self,
             ranges: &[(u64, usize)],

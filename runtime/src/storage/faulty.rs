@@ -115,7 +115,8 @@ pub struct Config {
     /// Failure rate for `open_versioned` operations.
     pub open_rate: Option<Probability>,
 
-    /// Failure rate for `read_at` operations.
+    /// Failure rate for nonempty reads. An injected fault takes precedence over the
+    /// underlying blob's range errors.
     pub read_rate: Option<Probability>,
 
     /// Failure and byte-retention configuration for `write_at` operations.
@@ -2106,10 +2107,12 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
-        assert!(matches!(
-            blob.read_at(0, 4, ReadOptions::default()).await,
-            Err(Error::Io(_))
-        ));
+        for offset in [0, i64::MAX as u64] {
+            assert!(matches!(
+                blob.read_at(offset, 4, ReadOptions::default()).await,
+                Err(Error::Io(_))
+            ));
+        }
     }
 
     #[tokio::test]

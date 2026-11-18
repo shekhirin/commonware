@@ -339,6 +339,30 @@ impl Blob {
         Ok(())
     }
 
+    /// Read a validated range without allocating a destination for missing bytes.
+    fn read_range<T>(
+        &self,
+        offset: u64,
+        len: usize,
+        copy: impl FnOnce(&[u8]) -> T,
+    ) -> Result<T, crate::Error> {
+        let start = super::read_offset(self.data_offset, offset, len)
+            .ok_or(crate::Error::OffsetOverflow)?;
+        if len == 0 {
+            return Ok(copy(&[]));
+        }
+        // A valid file range can exceed the address space of an in-memory blob.
+        let start = usize::try_from(start).map_err(|_| crate::Error::BlobInsufficientLength)?;
+        let end = start
+            .checked_add(len)
+            .ok_or(crate::Error::BlobInsufficientLength)?;
+        let content = self.content.read();
+        let bytes = content
+            .get(start..end)
+            .ok_or(crate::Error::BlobInsufficientLength)?;
+        Ok(copy(bytes))
+    }
+
     /// Merge selected bytes into durable storage without changing this handle's live contents.
     pub(crate) fn retain_crash_write(
         &self,
@@ -426,10 +450,9 @@ impl crate::Blob for Blob {
         &self,
         offset: u64,
         len: usize,
-        options: ReadOptions,
+        _options: ReadOptions,
     ) -> Result<IoBufsMut, crate::Error> {
-        self.read_at_buf(offset, len, IoBufMut::with_capacity(len), options)
-            .await
+        self.read_range(offset, len, |bytes| IoBufMut::from(bytes).into())
     }
 
     async fn read_at_buf(
@@ -442,24 +465,10 @@ impl crate::Blob for Blob {
         let mut bufs = bufs.into();
         // SAFETY: `len` bytes are filled via copy_from_slice below.
         unsafe { bufs.set_len(len) };
-        let offset = offset
-            .checked_add(self.data_offset)
-            .ok_or(crate::Error::OffsetOverflow)?;
-        if len == 0 {
-            return Ok(bufs);
-        }
-        let offset: usize = offset
-            .try_into()
-            .map_err(|_| crate::Error::OffsetOverflow)?;
-        let end = offset
-            .checked_add(len)
-            .ok_or(crate::Error::OffsetOverflow)?;
-        let content = self.content.read();
-        if end > content.len() {
-            return Err(crate::Error::BlobInsufficientLength);
-        }
-        bufs.copy_from_slice(&content[offset..end]);
-        Ok(bufs)
+        self.read_range(offset, len, |bytes| {
+            bufs.copy_from_slice(bytes);
+            bufs
+        })
     }
 
     async fn write_at(

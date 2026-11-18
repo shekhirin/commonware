@@ -168,6 +168,17 @@ stability_scope!(BETA {
     pub(crate) use crate::BlobLayout as Layout;
     pub(crate) use header::Header;
 
+    /// Resolve a read's physical start. Nonempty ranges must fit a buffer and end within the
+    /// signed file extent. Empty ranges need only a representable start since they issue no I/O.
+    fn read_offset(data_offset: u64, offset: u64, len: usize) -> Option<u64> {
+        let start = data_offset.checked_add(offset)?;
+        std::alloc::Layout::array::<u8>(len).ok()?;
+        if len != 0 && start.checked_add(len as u64)? > i64::MAX as u64 {
+            return None;
+        }
+        Some(start)
+    }
+
     /// Validate the names of a namespace operation before it changes the namespace.
     ///
     /// Rejects an empty blob name and, when `portable`, names beyond the portable limits
@@ -242,6 +253,7 @@ pub(crate) mod tests {
         test_blob_version_mismatch(&storage).await;
         test_aligned_layout(&storage).await;
         test_read_zero_length(&storage).await;
+        test_read_offset_overflow(&storage).await;
         test_read_at_buf_returns_same_buffer(&storage).await;
         test_read_at_buf_insufficient_capacity(&storage).await;
         test_read_at_buf_larger_capacity(&storage).await;
@@ -712,7 +724,9 @@ pub(crate) mod tests {
             .unwrap();
 
         for options in [ReadOptions::default(), ReadOptions::DONT_CACHE] {
-            for (offset, len) in [(0, 10), (6, 10)] {
+            // A valid range ending at the signed limit is still an EOF on this small blob.
+            let last = i64::MAX as u64 - crate::DEFAULT_BLOB_LAYOUT.data_offset();
+            for (offset, len) in [(0, 10), (6, 10), (last - 2, 2)] {
                 let result = blob.read_at(offset, len, options).await;
                 assert!(matches!(result, Err(Error::BlobInsufficientLength)));
 
@@ -1434,7 +1448,7 @@ pub(crate) mod tests {
             .unwrap();
 
         for options in [ReadOptions::default(), ReadOptions::DONT_CACHE] {
-            for offset in [0, 5, 6] {
+            for offset in [0, 5, 6, i64::MAX as u64] {
                 assert!(blob.read_at(offset, 0, options).await.unwrap().is_empty());
                 let bufs = [IoBufMut::zeroed(2), IoBufMut::zeroed(3)];
                 let output = blob.read_at_buf(offset, 0, bufs, options).await.unwrap();
@@ -1453,26 +1467,38 @@ pub(crate) mod tests {
                 assert!(empty.is_empty());
                 assert_eq!(data.coalesce(), b"el");
             }
+        }
+    }
 
-            // Even an empty range must have a representable physical offset.
-            assert!(matches!(
-                blob.read_at(u64::MAX, 0, options).await,
-                Err(crate::Error::OffsetOverflow)
-            ));
-            assert!(matches!(
-                blob.read_at_buf(u64::MAX, 0, IoBufMut::default(), options)
-                    .await,
-                Err(crate::Error::OffsetOverflow)
-            ));
-            let ranges = [(u64::MAX, 0)];
-            assert!(matches!(
-                crate::collect_reads(blob.read_many(&ranges, options), ranges.len()).await,
-                Err(crate::Error::OffsetOverflow)
-            ));
-            assert!(matches!(
-                blob.start_read_many(&ranges, options).await.await,
-                Err(crate::Error::OffsetOverflow)
-            ));
+    /// The start must fit even for an empty read. A positive read must also end within
+    /// the signed file extent, whether it starts outside it or only crosses the limit.
+    async fn test_read_offset_overflow(storage: &impl Storage) {
+        let (blob, _) = storage
+            .open("test_read_offset_overflow", b"blob")
+            .await
+            .unwrap();
+        let last = i64::MAX as u64;
+        for options in [ReadOptions::default(), ReadOptions::DONT_CACHE] {
+            for (offset, len) in [(u64::MAX, 0), (last, 1), (last - 8192, 8193), (last - 1, 1)] {
+                assert!(matches!(
+                    blob.read_at(offset, len, options).await,
+                    Err(crate::Error::OffsetOverflow)
+                ));
+                assert!(matches!(
+                    blob.read_at_buf(offset, len, IoBufMut::with_capacity(len), options)
+                        .await,
+                    Err(crate::Error::OffsetOverflow)
+                ));
+                let ranges = [(offset, len)];
+                assert!(matches!(
+                    crate::collect_reads(blob.read_many(&ranges, options), ranges.len()).await,
+                    Err(crate::Error::OffsetOverflow)
+                ));
+                assert!(matches!(
+                    blob.start_read_many(&ranges, options).await.await,
+                    Err(crate::Error::OffsetOverflow)
+                ));
+            }
         }
     }
 

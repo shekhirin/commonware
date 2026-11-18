@@ -84,7 +84,6 @@ use futures::{
 };
 use once_cell::sync::OnceCell;
 use std::{
-    alloc,
     fs::{self, File},
     future::Future,
     io::{Error as IoError, ErrorKind},
@@ -551,19 +550,8 @@ impl Blob {
     }
 
     /// Map the logical range of `len` bytes at `offset` to its physical offset.
-    ///
-    /// Fails with [Error::OffsetOverflow] when the range's physical offset or end overflows, or
-    /// when `len` exceeds `isize::MAX` so that no buffer can hold it. A representable end keeps
-    /// every partial read below `u64::MAX`, so no read reaches the current-position sentinel.
     fn physical_offset(&self, offset: u64, len: usize) -> Result<u64, Error> {
-        let offset = offset
-            .checked_add(self.data_offset)
-            .ok_or(Error::OffsetOverflow)?;
-        offset
-            .checked_add(Widen::widen(len))
-            .ok_or(Error::OffsetOverflow)?;
-        alloc::Layout::array::<u8>(len).map_err(|_| Error::OffsetOverflow)?;
-        Ok(offset)
+        super::read_offset(self.data_offset, offset, len).ok_or(Error::OffsetOverflow)
     }
 
     /// Map the logical `ranges` of a batch to physical ranges.
@@ -2034,7 +2022,7 @@ mod tests {
                     .await
                     .unwrap_err()
                     .to_string(),
-                "read failed"
+                "offset overflow"
             );
             assert_eq!(
                 blob.write_at(u64::MAX, b"x".to_vec(), WriteOptions::default())
@@ -3339,18 +3327,23 @@ mod tests {
                 .await
                 .unwrap();
 
-            // Every range up to the largest representable end is valid, empty or not.
+            // A nonempty range can end at the signed limit. An empty one can start at u64::MAX.
             let data_offset = blob.data_offset;
             assert!(data_offset > 0);
+            let last = i64::MAX as u64;
             assert_eq!(
-                blob.physical_ranges(&[(0, 4096), (7, 0), (u64::MAX - data_offset - 1, 1)])
-                    .unwrap(),
-                [(data_offset, 4096), (data_offset + 7, 0), (u64::MAX - 1, 1)]
+                blob.physical_ranges(&[
+                    (0, 4096),
+                    (u64::MAX - data_offset, 0),
+                    (last - data_offset - 1, 1)
+                ])
+                .unwrap(),
+                [(data_offset, 4096), (u64::MAX, 0), (last - 1, 1)]
             );
 
-            // A physical offset or end past u64::MAX, or a length no buffer can hold, fails the
-            // mapping.
+            // An unrepresentable range or a length no buffer can hold fails the mapping.
             for ranges in [
+                vec![(0, 1), (last - data_offset, 1)],
                 vec![(0, 1), (u64::MAX, 1)],
                 vec![(0, 1), (u64::MAX - data_offset - 100, 101)],
                 vec![(0, isize::MAX as usize + 1)],
