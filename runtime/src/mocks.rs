@@ -983,7 +983,8 @@ impl<B: Blob> Blob for DelayedSyncBlob<B> {
         bufs: impl Into<IoBufs> + Send,
         options: WriteOptions,
     ) -> Result<(), Error> {
-        if !options.contains(WriteOptions::SYNC) || !self.pending.tracking() {
+        let bufs = bufs.into();
+        if bufs.is_empty() || !options.contains(WriteOptions::SYNC) || !self.pending.tracking() {
             return self.inner.write_at(offset, bufs, options).await;
         }
         self.inner
@@ -1772,6 +1773,31 @@ mod tests {
                 writes: Vec::new(),
             }
         );
+    }
+
+    #[test]
+    fn delayed_sync_blob_empty_sync_write_preserves_gate() {
+        deterministic::Runner::default().start(|context| async move {
+            let (inner, _) = context.open("delayed_sync", b"blob").await.unwrap();
+            let (blob, pending) = DelayedSyncBlob::new(inner);
+            pending.arm();
+
+            assert!(matches!(
+                blob.write_at(u64::MAX, b"", WriteOptions::SYNC).await,
+                Err(Error::OffsetOverflow)
+            ));
+            assert!(matches!(
+                poll!(std::pin::pin!(blob.write_at(1, b"", WriteOptions::SYNC))),
+                Poll::Ready(Ok(()))
+            ));
+            assert_eq!(pending.calls(), 0);
+
+            let mut sync = std::pin::pin!(blob.sync());
+            assert!(poll!(sync.as_mut()).is_pending());
+            assert_eq!(pending.calls(), 1);
+            next_pending_sync(&pending).release.send(Ok(())).unwrap();
+            sync.await.unwrap();
+        });
     }
 
     #[test]
