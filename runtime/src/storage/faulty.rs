@@ -265,7 +265,7 @@ impl<B> PendingMutation<B> {
 /// Unresolved entries in issue order within each file generation.
 type PendingMutations<B> = Arc<Mutex<Vec<PendingMutation<B>>>>;
 
-/// Evidence detached from the fault model. Callers release namespace locks before dropping it.
+/// Evidence detached from the fault model. Release namespace and mutation locks before dropping it.
 pub(crate) struct Retired<B> {
     _mutations: Vec<PendingMutation<B>>,
 }
@@ -906,9 +906,11 @@ impl<B: crate::Blob> crate::Blob for Blob<B> {
         if self.ctx.should_fail(Op::Sync) {
             return Err(injected_io_error().into());
         }
-        let _mutation = self.generation.mutation.lock().await;
+        let mutation = self.generation.mutation.lock().await;
         self.inner.sync().await?;
-        clear_pending(&self.pending, std::slice::from_ref(&self.generation));
+        let retired = clear_pending(&self.pending, std::slice::from_ref(&self.generation));
+        drop(mutation);
+        drop(retired);
         Ok(())
     }
 
@@ -916,7 +918,7 @@ impl<B: crate::Blob> crate::Blob for Blob<B> {
         if self.ctx.should_fail(Op::Sync) {
             return Handle::ready(Err(injected_io_error().into()));
         }
-        let _mutation = self.generation.mutation.lock().await;
+        let mutation = self.generation.mutation.lock().await;
         let mut completion = self.inner.start_sync().await;
 
         // A sync that completed during admission resolves its bookkeeping now, so discarding
@@ -924,7 +926,9 @@ impl<B: crate::Blob> crate::Blob for Blob<B> {
         // guard keeps every earlier mutation of this generation recorded before this point.
         if let Some(result) = (&mut completion).now_or_never() {
             if result.is_ok() {
-                clear_pending(&self.pending, std::slice::from_ref(&self.generation));
+                let retired = clear_pending(&self.pending, std::slice::from_ref(&self.generation));
+                drop(mutation);
+                drop(retired);
             }
             return Handle::ready(result);
         }
@@ -1491,6 +1495,44 @@ mod tests {
                 .as_ref(),
             b"freshlater"
         );
+    }
+
+    #[tokio::test]
+    async fn test_full_sync_releases_mutation_guard_before_retiring_buffers() {
+        struct Owner(Arc<FileGeneration>, Arc<AtomicBool>);
+
+        impl AsRef<[u8]> for Owner {
+            fn as_ref(&self) -> &[u8] {
+                b"x"
+            }
+        }
+
+        impl Drop for Owner {
+            fn drop(&mut self) {
+                self.1
+                    .store(self.0.mutation.try_lock().is_ok(), Ordering::Relaxed);
+            }
+        }
+
+        let h = Harness::new(Config::default().write(WriteConfig {
+            failure_rate: probability!(0.0),
+            retention_rate: probability!(1.0),
+            mode: PartialWriteMode::Prefix,
+        }));
+        let (blob, _) = h.storage.open("partition", b"test").await.unwrap();
+        for start in [true, false] {
+            let unlocked = Arc::new(AtomicBool::new(false));
+            let buf = bytes::Bytes::from_owner(Owner(blob.generation.clone(), unlocked.clone()));
+            blob.write_at(0, buf, WriteOptions::default())
+                .await
+                .unwrap();
+            if start {
+                drop(blob.start_sync().await);
+            } else {
+                blob.sync().await.unwrap();
+            }
+            assert!(unlocked.load(Ordering::Relaxed), "start_sync = {start}");
+        }
     }
 
     #[tokio::test]
