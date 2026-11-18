@@ -188,7 +188,7 @@ impl crate::Storage for Storage {
         name: &[u8],
         versions: RangeInclusive<BlobVersion>,
     ) -> Result<(Self::Blob, u64, BlobVersion), Error> {
-        super::validate_partition_name(partition)?;
+        super::validate_names(partition, Some(name), false)?;
 
         // Construct the full path
         let path = self.cfg.storage_directory.join(partition).join(hex(name));
@@ -282,7 +282,7 @@ impl crate::Storage for Storage {
     }
 
     async fn remove(&self, partition: &str, name: Option<&[u8]>) -> Result<(), Error> {
-        super::validate_partition_name(partition)?;
+        super::validate_names(partition, name, false)?;
 
         let path = self.cfg.storage_directory.join(partition);
         let storage_directory = self.cfg.storage_directory.clone();
@@ -326,7 +326,7 @@ impl crate::Storage for Storage {
     }
 
     async fn scan(&self, partition: &str) -> Result<Vec<Vec<u8>>, Error> {
-        super::validate_partition_name(partition)?;
+        super::validate_names(partition, None, false)?;
 
         let path = self.cfg.storage_directory.join(partition);
         let partition = partition.to_string();
@@ -371,7 +371,10 @@ mod tests {
     use super::*;
     use crate::{
         BLOB_PAGE_SIZE, Blob, ReadOptions, Runner as _, Storage as _, WriteOptions,
-        storage::{Header, Layout, shared, tests::run_storage_tests},
+        storage::{
+            Header, Layout, shared,
+            tests::{run_storage_tests, test_host_name_limits},
+        },
         tokio::Runner,
     };
     use commonware_utils::{Widen, sys_rng};
@@ -521,6 +524,18 @@ mod tests {
             let config = Config::new(storage_directory, Layout::ALL);
             let storage = Storage::new(config);
             run_storage_tests(context, storage).await;
+        });
+    }
+
+    #[test]
+    fn test_tokio_host_name_limits() {
+        Runner::default().start(|_| async move {
+            let mut rng = sys_rng();
+            let storage_directory =
+                env::temp_dir().join(format!("storage_tokio_{}", rng.random::<u64>()));
+            let storage = Storage::new(Config::new(storage_directory.clone(), Layout::ALL));
+            test_host_name_limits(&storage, &storage_directory).await;
+            let _ = std::fs::remove_dir_all(&storage_directory);
         });
     }
 

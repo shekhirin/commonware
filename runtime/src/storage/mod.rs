@@ -168,19 +168,29 @@ stability_scope!(BETA {
     pub(crate) use crate::BlobLayout as Layout;
     pub(crate) use header::Header;
 
-    /// Validate that a partition name contains only allowed characters.
+    /// Validate the names of a namespace operation before it changes the namespace.
     ///
-    /// Partition names must only contain alphanumeric characters, dashes ('-'),
-    /// or underscores ('_').
-    pub fn validate_partition_name(partition: &str) -> Result<(), crate::Error> {
-        if partition.is_empty()
-            || partition
-                .chars()
-                .any(|c| !(c.is_ascii_alphanumeric() || ['_', '-'].contains(&c)))
+    /// Rejects an empty blob name and, when `portable`, names beyond the portable limits
+    /// of [crate::Storage]. `None` names the whole partition.
+    fn validate_names(
+        partition: &str,
+        name: Option<&[u8]>,
+        portable: bool,
+    ) -> Result<(), crate::Error> {
+        let reason = if portable && partition.len() > 255 {
+            "partition name exceeds 255 bytes"
+        } else if partition.is_empty()
+            || !partition.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-'))
         {
             return Err(crate::Error::PartitionNameInvalid(partition.into()));
-        }
-        Ok(())
+        } else {
+            match name {
+                Some([]) => "blob name is empty",
+                Some(name) if portable && name.len() > 127 => "blob name exceeds 127 bytes",
+                _ => return Ok(()),
+            }
+        };
+        Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, reason).into())
     }
 });
 
@@ -195,7 +205,7 @@ pub(crate) mod tests {
         WriteOptions,
     };
     use futures::FutureExt;
-    use std::sync::Arc;
+    use std::{fs, path::Path, sync::Arc};
 
     /// Runs the full suite of tests on the provided storage implementation.
     pub(crate) async fn run_storage_tests<S>(context: impl Spawner, storage: S)
@@ -228,6 +238,7 @@ pub(crate) mod tests {
         test_overlapping_writes(&storage).await;
         test_resize_then_open(&storage).await;
         test_partition_name_validation(&storage).await;
+        test_blob_name_validation(&storage).await;
         test_blob_version_mismatch(&storage).await;
         test_aligned_layout(&storage).await;
         test_read_zero_length(&storage).await;
@@ -1193,6 +1204,96 @@ pub(crate) mod tests {
                 ),
                 "Invalid partition name '{invalid}' should be rejected by scan"
             );
+        }
+    }
+
+    /// Return whether `result` failed name validation.
+    pub(crate) fn is_invalid_name<T>(result: &Result<T, crate::Error>) -> bool {
+        matches!(
+            result,
+            Err(crate::Error::Io(error)) if error.kind() == std::io::ErrorKind::InvalidInput
+        )
+    }
+
+    /// Test that an empty blob name is rejected without changing the namespace, and that
+    /// binary names are accepted.
+    async fn test_blob_name_validation<S>(storage: &S)
+    where
+        S: Storage,
+    {
+        const PARTITION: &str = "blob_name_validation";
+        let default = crate::DEFAULT_BLOB_VERSION..=crate::DEFAULT_BLOB_VERSION;
+
+        // A rejected empty name creates no partition.
+        assert!(is_invalid_name(&storage.open(PARTITION, b"").await));
+        assert!(is_invalid_name(
+            &storage
+                .open_versioned(PARTITION, b"", default.clone())
+                .await
+        ));
+        assert!(is_invalid_name(&storage.remove(PARTITION, Some(b"")).await));
+        assert!(matches!(
+            storage.scan(PARTITION).await,
+            Err(crate::Error::PartitionMissing(_))
+        ));
+
+        // An empty name resolves to neither the partition nor a blob in it.
+        let (blob, _) = storage.open(PARTITION, b"blob").await.unwrap();
+        drop(blob);
+        assert!(is_invalid_name(
+            &storage.open_versioned(PARTITION, b"", default).await
+        ));
+        assert!(is_invalid_name(&storage.remove(PARTITION, Some(b"")).await));
+        assert_eq!(
+            storage.scan(PARTITION).await.unwrap(),
+            vec![b"blob".to_vec()]
+        );
+
+        // Arbitrary bytes, including path separators, are accepted.
+        let name = vec![0, b'/', b'.', 0xff];
+        let (blob, _) = storage.open(PARTITION, &name).await.unwrap();
+        drop(blob);
+        assert!(storage.scan(PARTITION).await.unwrap().contains(&name));
+        storage.remove(PARTITION, Some(&name)).await.unwrap();
+        assert!(!storage.scan(PARTITION).await.unwrap().contains(&name));
+        storage.remove(PARTITION, None).await.unwrap();
+    }
+
+    /// Test that filesystem storage rooted at `root` leaves names at and beyond the portable
+    /// limits to the host: each succeeds exactly when the host accepts the same path
+    /// components on the same mount.
+    pub(crate) async fn test_host_name_limits(storage: &impl Storage, root: &Path) {
+        for (partition_len, name_len) in [(255, 1), (256, 1), (1, 127), (1, 128)] {
+            let partition = "p".repeat(partition_len);
+            let name = vec![0xab; name_len];
+            let dir = root.join(&partition);
+            let expected = fs::create_dir(&dir).is_ok_and(|()| {
+                let supported =
+                    fs::File::create(dir.join(commonware_formatting::hex(&name))).is_ok();
+                fs::remove_dir_all(&dir).unwrap();
+                supported
+            });
+            let opened = storage.open(&partition, &name).await;
+            assert!(!is_invalid_name(&opened));
+            assert_eq!(
+                opened.is_ok(),
+                expected,
+                "lengths {partition_len}, {name_len}"
+            );
+            let scanned = storage.scan(&partition).await;
+            assert!(!is_invalid_name(&scanned));
+            if let Ok((blob, _)) = opened {
+                drop(blob);
+                assert_eq!(scanned.unwrap(), [name.as_slice()]);
+                storage.remove(&partition, Some(&name)).await.unwrap();
+            }
+
+            // The blob is gone, whether or not the host accepted its name.
+            assert!(matches!(
+                storage.remove(&partition, Some(&name)).await,
+                Err(Error::BlobMissing(..))
+            ));
+            assert!(!is_invalid_name(&storage.remove(&partition, None).await));
         }
     }
 

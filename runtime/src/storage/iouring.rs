@@ -157,7 +157,7 @@ impl crate::Storage for Storage {
         name: &[u8],
         versions: RangeInclusive<BlobVersion>,
     ) -> Result<(Blob, u64, BlobVersion), Error> {
-        super::validate_partition_name(partition)?;
+        super::validate_names(partition, Some(name), false)?;
 
         let (blob, mut logical_len, blob_version, wait, owed) = {
             // Acquire the filesystem lock
@@ -238,7 +238,7 @@ impl crate::Storage for Storage {
     }
 
     async fn remove(&self, partition: &str, name: Option<&[u8]>) -> Result<(), Error> {
-        super::validate_partition_name(partition)?;
+        super::validate_names(partition, name, false)?;
 
         // Acquire the filesystem lock
         let _guard = self.lock.lock();
@@ -266,7 +266,7 @@ impl crate::Storage for Storage {
     }
 
     async fn scan(&self, partition: &str) -> Result<Vec<Vec<u8>>, Error> {
-        super::validate_partition_name(partition)?;
+        super::validate_names(partition, None, false)?;
 
         // Acquire the filesystem lock
         let _guard = self.lock.lock();
@@ -906,7 +906,10 @@ mod tests {
         Storage as _, Supervisor as _,
         buffer::paged::{CHECKSUM_SIZE, CacheRef, Writer},
         iouring::{self, operation::tests::admitted},
-        storage::{Header, Layout, shared, tests::run_storage_tests},
+        storage::{
+            Header, Layout, shared,
+            tests::{run_storage_tests, test_host_name_limits},
+        },
     };
     use commonware_utils::{NZU16, NZUsize, channel::oneshot};
     use futures::TryStreamExt as _;
@@ -1436,6 +1439,15 @@ mod tests {
             // Verify the io_uring storage backend satisfies the shared storage trait suite.
             let (storage, storage_directory) = create_test_storage();
             run_storage_tests(context, storage).await;
+            let _ = std::fs::remove_dir_all(storage_directory);
+        });
+    }
+
+    #[test]
+    fn test_iouring_host_name_limits() {
+        iouring::Runner::default().start(|_| async move {
+            let (storage, storage_directory) = create_test_storage();
+            test_host_name_limits(&storage, &storage_directory).await;
             let _ = std::fs::remove_dir_all(storage_directory);
         });
     }

@@ -709,13 +709,21 @@ stability_scope!(BETA {
     /// Runtimes must ensure that no operation issued by a previous run against
     /// the same storage is still in flight when a new run begins.
     ///
-    /// # Partition Names
+    /// # Partition and blob names
     ///
     /// Partition names must be non-empty and contain only ASCII alphanumeric
     /// characters, dashes (`-`), or underscores (`_`). Names containing other
     /// characters (e.g., `/`, `.`, spaces) will return an error. On case-insensitive
     /// filesystems, partition names that differ only by letter case must not both
     /// be used.
+    ///
+    /// Blob names are non-empty byte strings. Opening or removing a blob with an empty name
+    /// fails before changing the namespace. Passing `None` to [Storage::remove] removes the
+    /// entire partition. If opening a non-empty name fails, a newly created partition
+    /// can remain empty.
+    ///
+    /// For portability, use at most 255 bytes per partition name and 127 bytes per blob
+    /// name. Support for longer names varies, and the host filesystem can impose lower limits.
     pub trait Storage: Send + Sync + 'static {
         /// The readable/writeable storage buffer that can be opened by this Storage.
         type Blob: Blob;

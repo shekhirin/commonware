@@ -4,6 +4,11 @@
 //!
 //! Unless configured otherwise, any task panic will lead to a runtime panic.
 //!
+//! # Storage
+//!
+//! Storage enforces the [portable name limits](crate::Storage#partition-and-blob-names).
+//! Longer names fail with [std::io::ErrorKind::InvalidInput].
+//!
 //! # External Processes
 //!
 //! When testing an application that interacts with some external process, it can appear to

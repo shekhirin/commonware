@@ -123,7 +123,7 @@ impl Storage {
         layout: Layout,
         versions: RangeInclusive<BlobVersion>,
     ) -> Result<(Blob, u64, BlobVersion), crate::Error> {
-        super::validate_partition_name(partition)?;
+        super::validate_names(partition, Some(name), true)?;
 
         let key = (partition.to_string(), name.to_vec());
         let mut generations = self.generations.lock();
@@ -207,7 +207,7 @@ impl crate::Storage for Storage {
     }
 
     async fn remove(&self, partition: &str, name: Option<&[u8]>) -> Result<(), crate::Error> {
-        super::validate_partition_name(partition)?;
+        super::validate_names(partition, name, true)?;
 
         let mut generations = self.generations.lock();
         let mut partitions = self.partitions.lock();
@@ -233,7 +233,7 @@ impl crate::Storage for Storage {
     }
 
     async fn scan(&self, partition: &str) -> Result<Vec<Vec<u8>>, crate::Error> {
-        super::validate_partition_name(partition)?;
+        super::validate_names(partition, None, true)?;
 
         let partitions = self.partitions.lock();
         let partition = partitions
@@ -530,7 +530,7 @@ mod tests {
             faulty::{
                 Config as FaultConfig, PartialWriteMode, Storage as FaultyStorage, WriteConfig,
             },
-            tests::run_storage_tests,
+            tests::{is_invalid_name, run_storage_tests},
         },
     };
     use commonware_utils::{ScriptedRng, probability};
@@ -687,6 +687,37 @@ mod tests {
             let storage = crate::mocks::Storage::new();
             run_storage_tests(context, storage).await;
         });
+    }
+
+    #[tokio::test]
+    async fn test_portable_name_limits() {
+        let storage = Storage::new();
+        let partition = "p".repeat(256);
+        let name = [0xab; 128];
+
+        // Names beyond the portable limits are rejected by every namespace operation.
+        assert!(is_invalid_name(&storage.open(&partition, b"blob").await));
+        assert!(is_invalid_name(&storage.remove(&partition, None).await));
+        assert!(is_invalid_name(
+            &storage.remove(&partition, Some(b"blob")).await
+        ));
+        assert!(is_invalid_name(&storage.scan(&partition).await));
+        assert!(is_invalid_name(&storage.open("partition", &name).await));
+        assert!(is_invalid_name(
+            &storage.remove("partition", Some(&name)).await
+        ));
+
+        // Rejected operations leave no partition behind.
+        assert!(storage.partitions.lock().is_empty());
+        assert!(storage.generations.lock().current.is_empty());
+
+        // Names at the portable limits are accepted.
+        let (partition, name) = (&partition[..255], &name[..127]);
+        let (blob, _) = storage.open(partition, name).await.unwrap();
+        drop(blob);
+        assert_eq!(storage.scan(partition).await.unwrap(), [name]);
+        storage.remove(partition, Some(name)).await.unwrap();
+        storage.remove(partition, None).await.unwrap();
     }
 
     #[tokio::test]
