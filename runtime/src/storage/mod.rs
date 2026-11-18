@@ -750,10 +750,22 @@ pub(crate) mod tests {
             .await
             .unwrap();
 
-        // Empty writes should be accepted without extending the blob.
-        blob.write_at(1024, Vec::<u8>::new(), WriteOptions::SYNC)
-            .await
-            .unwrap();
+        // Even after a sync, empty writes must not extend the blob.
+        for options in [
+            WriteOptions::default(),
+            WriteOptions::SYNC,
+            WriteOptions::DONT_CACHE,
+            WriteOptions::SYNC | WriteOptions::DONT_CACHE,
+        ] {
+            blob.write_at(1024, Vec::<u8>::new(), options)
+                .await
+                .unwrap();
+            assert!(matches!(
+                blob.write_at(u64::MAX, Vec::<u8>::new(), options).await,
+                Err(crate::Error::OffsetOverflow)
+            ));
+        }
+        blob.sync().await.unwrap();
         drop(blob);
 
         let (blob, len) = storage

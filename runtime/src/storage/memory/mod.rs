@@ -469,17 +469,16 @@ impl crate::Blob for Blob {
         options: WriteOptions,
     ) -> Result<(), crate::Error> {
         let bufs = bufs.into();
-        let sync = options.contains(WriteOptions::SYNC);
-        if sync && !bufs.has_remaining() {
-            return Ok(());
-        }
-        let buf = bufs.coalesce();
         let offset = offset
             .checked_add(self.data_offset)
             .ok_or(crate::Error::OffsetOverflow)?;
+        if !bufs.has_remaining() {
+            return Ok(());
+        }
         let offset: usize = offset
             .try_into()
             .map_err(|_| crate::Error::OffsetOverflow)?;
+        let buf = bufs.coalesce();
         let required = offset
             .checked_add(buf.len())
             .ok_or(crate::Error::OffsetOverflow)?;
@@ -490,7 +489,7 @@ impl crate::Blob for Blob {
             }
             content[offset..offset + buf.len()].copy_from_slice(buf.as_ref());
         }
-        if sync {
+        if options.contains(WriteOptions::SYNC) {
             self.sync_range_inner(offset, buf.as_ref())
         } else {
             Ok(())
@@ -688,29 +687,6 @@ mod tests {
             let storage = crate::mocks::Storage::new();
             run_storage_tests(context, storage).await;
         });
-    }
-
-    #[tokio::test]
-    async fn test_empty_write_semantics() {
-        let storage = Storage::new();
-
-        let (plain, _) = storage.open("partition", b"plain").await.unwrap();
-        plain
-            .write_at(8, Vec::<u8>::new(), WriteOptions::default())
-            .await
-            .unwrap();
-        plain.sync().await.unwrap();
-        drop(plain);
-        let (_, plain_len) = storage.open("partition", b"plain").await.unwrap();
-        assert_eq!(plain_len, 8);
-
-        let (sync, _) = storage.open("partition", b"sync").await.unwrap();
-        sync.write_at(8, Vec::<u8>::new(), WriteOptions::SYNC)
-            .await
-            .unwrap();
-        drop(sync);
-        let (_, sync_len) = storage.open("partition", b"sync").await.unwrap();
-        assert_eq!(sync_len, 0);
     }
 
     #[tokio::test]

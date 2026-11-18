@@ -982,6 +982,8 @@ stability_scope!(BETA {
         /// Write every remaining byte in `bufs` to the blob at `offset`.
         ///
         /// The buffers are treated as one logical byte sequence in chunk order.
+        /// If no bytes remain, the write still validates the offset but does not change the
+        /// blob's contents, length, or durability, regardless of the options.
         fn write_at(
             &self,
             offset: u64,
