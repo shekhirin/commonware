@@ -600,11 +600,8 @@ impl<
             return (self, None);
         };
 
-        // Persist the nullify if it is a first attempt
+        // A first attempt has no entry certificate to attach.
         if !retry {
-            self = self
-                .append_journal(Artifact::Nullify(nullify.clone()))
-                .await;
             return (self, Some((nullify, None)));
         }
 
