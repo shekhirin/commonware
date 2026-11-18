@@ -1895,6 +1895,14 @@ mod tests {
                 .await
                 .unwrap();
             assert!(read.is_empty());
+            let ranges = [(0, 0), (OFFSET, 0)];
+            let reads = crate::collect_reads(
+                blob.read_many(&ranges, ReadOptions::DONT_CACHE),
+                ranges.len(),
+            )
+            .await
+            .unwrap();
+            assert!(reads.iter().all(|buf| buf.is_empty()));
             assert!(blob.shared.direct.set(direct).is_ok());
 
             // read_at and read_at_buf return the open's own bytes, in the caller's buffer for

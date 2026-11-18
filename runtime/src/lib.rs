@@ -912,6 +912,11 @@ stability_scope!(BETA {
     /// subset of its bytes may be durable. Bytes outside the written range remain
     /// unchanged.
     ///
+    /// # Read ranges
+    ///
+    /// A zero-length range reads no bytes and is valid even past the end of the blob.
+    /// An offset the runtime cannot represent can still return [Error::OffsetOverflow].
+    ///
     /// # Concurrency
     ///
     /// A read observes every write and resize that completed before the read began. A read

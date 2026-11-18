@@ -445,6 +445,9 @@ impl crate::Blob for Blob {
         let offset = offset
             .checked_add(self.data_offset)
             .ok_or(crate::Error::OffsetOverflow)?;
+        if len == 0 {
+            return Ok(bufs);
+        }
         let offset: usize = offset
             .try_into()
             .map_err(|_| crate::Error::OffsetOverflow)?;

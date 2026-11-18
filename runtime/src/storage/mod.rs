@@ -1311,17 +1311,47 @@ pub(crate) mod tests {
             .await
             .unwrap();
 
-        // read_at with len=0 should succeed and return empty
-        let output = blob.read_at(0, 0, ReadOptions::default()).await.unwrap();
-        assert_eq!(output.len(), 0);
+        for options in [ReadOptions::default(), ReadOptions::DONT_CACHE] {
+            for offset in [0, 5, 6] {
+                assert!(blob.read_at(offset, 0, options).await.unwrap().is_empty());
+                let bufs = [IoBufMut::zeroed(2), IoBufMut::zeroed(3)];
+                let output = blob.read_at_buf(offset, 0, bufs, options).await.unwrap();
+                assert!(output.is_empty());
+                assert!(!output.is_single());
+                assert_eq!(output.capacity(), 5);
+            }
 
-        // read_at_buf with len=0 should also succeed
-        let buf = IoBufMut::with_capacity(16);
-        let output = blob
-            .read_at_buf(0, 0, buf, ReadOptions::default())
-            .await
-            .unwrap();
-        assert_eq!(output.len(), 0);
+            let ranges = [(6, 0), (1, 2)];
+            let streamed = crate::collect_reads(blob.read_many(&ranges, options), ranges.len())
+                .await
+                .unwrap();
+            let started = blob.start_read_many(&ranges, options).await.await.unwrap();
+            for buffers in [streamed, started] {
+                let [empty, data]: [_; 2] = buffers.try_into().unwrap();
+                assert!(empty.is_empty());
+                assert_eq!(data.coalesce(), b"el");
+            }
+
+            // Even an empty range must have a representable physical offset.
+            assert!(matches!(
+                blob.read_at(u64::MAX, 0, options).await,
+                Err(crate::Error::OffsetOverflow)
+            ));
+            assert!(matches!(
+                blob.read_at_buf(u64::MAX, 0, IoBufMut::default(), options)
+                    .await,
+                Err(crate::Error::OffsetOverflow)
+            ));
+            let ranges = [(u64::MAX, 0)];
+            assert!(matches!(
+                crate::collect_reads(blob.read_many(&ranges, options), ranges.len()).await,
+                Err(crate::Error::OffsetOverflow)
+            ));
+            assert!(matches!(
+                blob.start_read_many(&ranges, options).await.await,
+                Err(crate::Error::OffsetOverflow)
+            ));
+        }
     }
 
     /// Test that read_at_buf returns the same buffer that was passed in (contract verification).

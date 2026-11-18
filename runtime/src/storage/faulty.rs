@@ -778,7 +778,7 @@ impl<B: crate::Blob> crate::Blob for Blob<B> {
         len: usize,
         options: ReadOptions,
     ) -> Result<IoBufsMut, Error> {
-        if self.ctx.should_fail(Op::Read) {
+        if len != 0 && self.ctx.should_fail(Op::Read) {
             return Err(injected_io_error().into());
         }
         self.inner.read_at(offset, len, options).await
@@ -791,7 +791,7 @@ impl<B: crate::Blob> crate::Blob for Blob<B> {
         bufs: impl Into<IoBufsMut> + Send,
         options: ReadOptions,
     ) -> Result<IoBufsMut, Error> {
-        if self.ctx.should_fail(Op::Read) {
+        if len != 0 && self.ctx.should_fail(Op::Read) {
             return Err(injected_io_error().into());
         }
         self.inner
@@ -2091,6 +2091,12 @@ mod tests {
         // Enable read faults
         h.config.write().read_rate = Some(probability!(1.0));
 
+        assert!(
+            blob.read_at(5, 0, ReadOptions::default())
+                .await
+                .unwrap()
+                .is_empty()
+        );
         assert!(matches!(
             blob.read_at(0, 4, ReadOptions::default()).await,
             Err(Error::Io(_))
