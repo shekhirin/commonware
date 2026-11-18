@@ -500,13 +500,14 @@ impl crate::Blob for Blob {
         let end = memory_len(range.end)?;
         let offset = range.start as usize;
         let buf = bufs.coalesce();
-        {
-            let mut content = self.content.write();
-            if end > content.len() {
-                resize_vec(&mut content, end);
-            }
-            content[offset..end].copy_from_slice(buf.as_ref());
+
+        // Hold the live contents through publication so overlapping durable writes publish in
+        // the order they updated the live contents.
+        let mut content = self.content.write();
+        if end > content.len() {
+            resize_vec(&mut content, end);
         }
+        content[offset..end].copy_from_slice(buf.as_ref());
         if options.contains(WriteOptions::SYNC) {
             self.sync_range_inner(offset, buf.as_ref())
         } else {
@@ -551,7 +552,10 @@ mod tests {
     use commonware_utils::{ScriptedRng, probability};
     use futures::executor::block_on;
     use rstest::rstest;
-    use std::{sync::mpsc, time::Duration};
+    use std::{
+        sync::{Barrier, mpsc},
+        time::Duration,
+    };
 
     #[rstest]
     #[case::range(true)]
@@ -608,6 +612,39 @@ mod tests {
                 .coalesce(),
             b"oldnew"
         );
+    }
+
+    #[test]
+    fn test_overlapping_sync_writes_agree_after_reopen() {
+        const WRITERS: u8 = 8;
+        const LEN: usize = 64;
+        let storage = Storage::new();
+        for round in 0..64u32 {
+            let name = round.to_be_bytes();
+            let (blob, _) = block_on(storage.open("partition", &name)).unwrap();
+            let barrier = Barrier::new(WRITERS as usize);
+            std::thread::scope(|scope| {
+                for fill in 1..=WRITERS {
+                    let (blob, barrier) = (&blob, &barrier);
+                    scope.spawn(move || {
+                        barrier.wait();
+                        block_on(blob.write_at(0, vec![fill; LEN], WriteOptions::SYNC)).unwrap();
+                    });
+                }
+            });
+
+            // Once every write has returned, a reopen observes the bytes the live handle reads.
+            let live = block_on(blob.read_at(0, LEN, ReadOptions::default()))
+                .unwrap()
+                .coalesce();
+            drop(blob);
+            let (reopened, size) = block_on(storage.open("partition", &name)).unwrap();
+            assert_eq!(size, LEN as u64);
+            let durable = block_on(reopened.read_at(0, LEN, ReadOptions::default()))
+                .unwrap()
+                .coalesce();
+            assert_eq!(live.as_ref(), durable.as_ref(), "round {round}");
+        }
     }
 
     async fn assert_logical_open_contract<S: crate::Storage>(storage: S, shared: S) {
