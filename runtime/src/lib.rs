@@ -922,8 +922,11 @@ stability_scope!(BETA {
     ///
     /// # Read ranges
     ///
-    /// A zero-length range reads no bytes and is valid even past the end of the blob.
-    /// An offset the runtime cannot represent can still return [Error::OffsetOverflow].
+    /// Reads are exact. If the end of the blob is reached before a range is filled, the
+    /// read fails with [Error::BlobInsufficientLength]. A zero-length range reads no bytes
+    /// and is valid even past the end of the blob.
+    /// A range the backend cannot address can fail before reaching EOF, for example
+    /// with [Error::OffsetOverflow].
     ///
     /// # Concurrency
     ///

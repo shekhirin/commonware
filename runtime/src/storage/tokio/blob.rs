@@ -298,6 +298,16 @@ impl Blob {
         self.shared.tracker.skipped()
     }
 
+    fn read_buffered_exact_at(file: &File, buf: &mut [u8], offset: u64) -> Result<(), Error> {
+        file.read_exact_at(buf, offset).map_err(|err| {
+            if err.kind() == std::io::ErrorKind::UnexpectedEof {
+                Error::BlobInsufficientLength
+            } else {
+                err.into()
+            }
+        })
+    }
+
     #[cfg(target_os = "linux")]
     fn read_exact_at(
         mut cache: Cache,
@@ -306,8 +316,7 @@ impl Blob {
         mut offset: u64,
     ) -> Result<(), Error> {
         if !cache.is_disabled(&file.dont_cache_supported) {
-            file.read_exact_at(buf, offset)?;
-            return Ok(());
+            return Self::read_buffered_exact_at(file, buf, offset);
         }
 
         while !buf.is_empty() {
@@ -332,15 +341,14 @@ impl Blob {
                     continue;
                 }
                 if cache.retry_cached(&file.dont_cache_supported, &err, true) {
-                    file.read_exact_at(buf, offset)?;
-                    return Ok(());
+                    return Self::read_buffered_exact_at(file, buf, offset);
                 }
                 return Err(err.into());
             }
 
             let bytes_read = ret as usize;
             if bytes_read == 0 {
-                return Err(std::io::Error::from(std::io::ErrorKind::UnexpectedEof).into());
+                return Err(Error::BlobInsufficientLength);
             }
             let (_, unread) = buf.split_at_mut(bytes_read);
             buf = unread;
@@ -353,8 +361,7 @@ impl Blob {
 
     #[cfg(not(target_os = "linux"))]
     fn read_exact_at(_: Cache, file: &Shared, buf: &mut [u8], offset: u64) -> Result<(), Error> {
-        file.read_exact_at(buf, offset)?;
-        Ok(())
+        Self::read_buffered_exact_at(file, buf, offset)
     }
 
     fn write_single_at(file: &File, offset: u64, buf: &[u8]) -> Result<(), Error> {
@@ -1547,10 +1554,7 @@ mod tests {
                 .read_many(&[(LEN as u64 - 100, 101)], ReadOptions::DONT_CACHE)
                 .try_collect::<Vec<_>>()
                 .await;
-            assert!(matches!(
-                result,
-                Err(Error::Io(ref err)) if err.kind() == std::io::ErrorKind::UnexpectedEof
-            ));
+            assert!(matches!(result, Err(Error::BlobInsufficientLength)));
 
             drop(blob);
             storage.remove("partition", None).await.unwrap();
@@ -1801,8 +1805,7 @@ mod tests {
                     assert!(
                         matches!(
                             blob.read_at(offset, len, options).await,
-                            Err(Error::Io(ref err))
-                                if err.kind() == std::io::ErrorKind::UnexpectedEof
+                            Err(Error::BlobInsufficientLength)
                         ),
                         "({offset}, {len}) {options:?}"
                     );

@@ -201,10 +201,10 @@ pub(crate) mod shared;
 pub(crate) mod tests {
     pub(crate) use super::header::tests::v0_blob_bytes;
     use crate::{
-        Blob, BlobVersion, Buf, IoBuf, IoBufMut, IoBufs, IoBufsMut, ReadOptions, Spawner, Storage,
-        WriteOptions,
+        Blob, BlobVersion, Buf, Error, IoBuf, IoBufMut, IoBufs, IoBufsMut, ReadOptions, Spawner,
+        Storage, WriteOptions,
     };
-    use futures::FutureExt;
+    use futures::{FutureExt, TryStreamExt as _};
     use std::{fs, path::Path, sync::Arc};
 
     /// Runs the full suite of tests on the provided storage implementation.
@@ -696,7 +696,7 @@ pub(crate) mod tests {
         );
     }
 
-    /// Test reading from an offset beyond the written data.
+    /// Exact reads classify ranges that straddle EOF or start past it as short.
     async fn test_read_beyond_bound<S>(storage: &S)
     where
         S: Storage,
@@ -711,20 +711,29 @@ pub(crate) mod tests {
             .await
             .unwrap();
 
-        // Attempt to read beyond the written data
-        let result = blob.read_at(6, 10, ReadOptions::default()).await;
-        assert!(
-            result.is_err(),
-            "Reading beyond written data should return an error"
-        );
+        for options in [ReadOptions::default(), ReadOptions::DONT_CACHE] {
+            for (offset, len) in [(0, 10), (6, 10)] {
+                let result = blob.read_at(offset, len, options).await;
+                assert!(matches!(result, Err(Error::BlobInsufficientLength)));
 
-        // Same check via read_at_buf
-        let buf = IoBufMut::with_capacity(10);
-        let result = blob.read_at_buf(6, 10, buf, ReadOptions::default()).await;
-        assert!(
-            result.is_err(),
-            "read_at_buf beyond written data should return an error"
-        );
+                let single = IoBufMut::with_capacity(len);
+                let result = blob.read_at_buf(offset, len, single, options).await;
+                assert!(matches!(result, Err(Error::BlobInsufficientLength)));
+
+                let chunks = vec![IoBufMut::with_capacity(2), IoBufMut::with_capacity(len - 2)];
+                let result = blob.read_at_buf(offset, len, chunks, options).await;
+                assert!(matches!(result, Err(Error::BlobInsufficientLength)));
+
+                let ranges = [(0, 1), (offset, len)];
+                let result = blob
+                    .read_many(&ranges, options)
+                    .try_collect::<Vec<_>>()
+                    .await;
+                assert!(matches!(result, Err(Error::BlobInsufficientLength)));
+                let result = blob.start_read_many(&ranges, options).await.await;
+                assert!(matches!(result, Err(Error::BlobInsufficientLength)));
+            }
+        }
     }
 
     /// Test writing data at a large offset.
@@ -1061,16 +1070,16 @@ pub(crate) mod tests {
 
         let result = blob.read_at(0, 1, ReadOptions::default()).await;
         assert!(
-            result.is_err(),
-            "Reading from an empty blob should return an error"
+            matches!(result, Err(Error::BlobInsufficientLength)),
+            "Reading from an empty blob should report insufficient length"
         );
 
         // Same check via read_at_buf
         let buf = IoBufMut::with_capacity(1);
         let result = blob.read_at_buf(0, 1, buf, ReadOptions::default()).await;
         assert!(
-            result.is_err(),
-            "read_at_buf from an empty blob should return an error"
+            matches!(result, Err(Error::BlobInsufficientLength)),
+            "read_at_buf from an empty blob should report insufficient length"
         );
     }
 
