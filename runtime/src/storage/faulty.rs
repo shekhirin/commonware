@@ -267,7 +267,7 @@ impl<B> PendingMutation<B> {
 /// Unresolved entries in issue order within each file generation.
 type PendingMutations<B> = Arc<Mutex<Vec<PendingMutation<B>>>>;
 
-/// Evidence detached from the fault model. Release namespace and mutation locks before dropping it.
+/// Evidence detached by namespace operations or full syncs for disposal after unlocking.
 pub(crate) struct Retired<B> {
     _mutations: Vec<PendingMutation<B>>,
 }
@@ -958,35 +958,27 @@ impl<B: crate::Blob> crate::Blob for Blob<B> {
             return Handle::ready(Err(injected_io_error().into()));
         }
         let mutation = self.generation.mutation.lock().await;
-        let mut completion = self.inner.start_sync().await;
-
-        // A sync that completed during admission resolves its bookkeeping now, so discarding
-        // the returned handle cannot retain the cut or the mutations it covers. The mutation
-        // guard keeps every earlier mutation of this generation recorded before this point.
-        if let Some(result) = (&mut completion).now_or_never() {
-            if result.is_ok() {
-                let retired = clear_pending(&self.pending, std::slice::from_ref(&self.generation));
-                drop(mutation);
-                drop(retired);
-            }
-            return Handle::ready(result);
-        }
-
+        // Record the cut in mutation order. Later writes must remain pending even if
+        // they arrive before we observe this sync's result.
         let sync = Arc::new(PendingSync {
             generation: self.generation.clone(),
-            completion: completion.shared(),
+            completion: self.inner.start_sync().await.shared(),
         });
         self.pending
             .lock()
             .push(PendingMutation::Sync { sync: sync.clone() });
+        drop(mutation);
 
         let pending = self.pending.clone();
-        let completion = sync.completion.clone();
-        Handle::from_future(async move {
-            let result = completion.await;
+        let mut completion = sync.completion.clone().map(move |result| {
             resolve_pending_sync(&pending, &sync, result.is_ok());
             result
-        })
+        });
+        // Retire an already completed sync even if the caller discards its handle.
+        // Polling and dropping a backing completion may run backend code.
+        (&mut completion)
+            .now_or_never()
+            .map_or_else(|| Handle::from_future(completion), Handle::ready)
     }
 }
 
@@ -1572,6 +1564,28 @@ mod tests {
             }
             assert!(unlocked.load(Ordering::Relaxed), "start_sync = {start}");
         }
+    }
+
+    #[tokio::test]
+    async fn test_start_sync_observes_the_backing_completion_without_the_mutation_lock() {
+        let h = Harness::new(Config::default());
+        let (inner, _) = h.storage.open("partition", b"test").await.unwrap();
+        let generation = inner.generation.clone();
+        let (delayed, gate) = crate::mocks::DelayedSyncBlob::new(inner);
+        gate.unblock();
+        let pending = Arc::new(Mutex::new(Vec::new()));
+        let blob = Blob::new(
+            h.storage.ctx.clone(),
+            pending.clone(),
+            generation,
+            delayed,
+            0,
+        );
+
+        // This backing completion takes the same mutation lock when polled. It can finish
+        // during admission only after the wrapper releases that lock.
+        drop(blob.start_sync().await);
+        assert!(pending.lock().is_empty());
     }
 
     #[tokio::test]
