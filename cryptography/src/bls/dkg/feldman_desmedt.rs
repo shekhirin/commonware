@@ -362,9 +362,9 @@
 use crate::{
     BatchEntry, BatchVerifier, PublicKey, Secret, Signer,
     bls::{
-        key::Private,
+        key::{Private, read_nonzero},
         sharing::{Mode, ModeVersion, Share, Sharing},
-        variant::{ScalarReadCfg, Variant},
+        variant::Variant,
     },
     transcript::{Summary, Transcript, Version},
 };
@@ -1125,11 +1125,13 @@ impl<S: Write> Write for DealerPrivMsg<S> {
     }
 }
 
-impl<S: Read<Cfg = ScalarReadCfg>> Read for DealerPrivMsg<S> {
+impl<S: Read<Cfg = ()> + Additive + CtEq> Read for DealerPrivMsg<S> {
     type Cfg = ();
 
     fn read_cfg(buf: &mut impl Buf, _cfg: &Self::Cfg) -> Result<Self, commonware_codec::Error> {
-        Ok(Self::new(S::read_cfg(buf, &ScalarReadCfg::RejectZero)?))
+        Ok(Self {
+            share: read_nonzero(buf)?,
+        })
     }
 }
 

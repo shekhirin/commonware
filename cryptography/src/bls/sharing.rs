@@ -1,8 +1,4 @@
-use crate::bls::{
-    Error,
-    key::Private,
-    variant::{ScalarReadCfg, Variant},
-};
+use crate::bls::{Error, key::Private, variant::Variant};
 #[cfg(not(feature = "std"))]
 use alloc::sync::Arc;
 #[cfg(not(feature = "std"))]
@@ -13,7 +9,7 @@ use commonware_codec::{
 };
 use commonware_macros::stability;
 use commonware_math::{
-    algebra::{CryptoGroup, FieldNTT},
+    algebra::{Additive, CryptoGroup, FieldNTT},
     poly::{Interpolator, Poly},
 };
 use commonware_parallel::Sequential;
@@ -523,7 +519,7 @@ impl<S: Write> Write for Share<S> {
     }
 }
 
-impl<S: Read<Cfg = ScalarReadCfg>> Read for Share<S> {
+impl<S: Read<Cfg = ()> + Additive + CtEq> Read for Share<S> {
     type Cfg = ();
 
     fn read_cfg(buf: &mut impl Buf, _: &()) -> Result<Self, commonware_codec::Error> {

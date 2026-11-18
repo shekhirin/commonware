@@ -19,26 +19,10 @@ use ctutils::CtEq;
 /// Reference: <https://datatracker.ietf.org/doc/html/draft-irtf-cfrg-bls-signature-05#name-ciphersuites>
 pub type DST = &'static [u8];
 
-/// Configuration for reading a [Variant::Scalar].
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ScalarReadCfg {
-    /// Accept any in-range scalar, including zero.
-    AllowZero,
-    /// Reject the zero scalar.
-    RejectZero,
-}
-
 /// A specific instance of a signature scheme.
 pub trait Variant: Clone + Send + Sync + Hash + Eq + Debug + 'static {
     /// The scalar type, which holds private keys.
-    type Scalar: FieldNTT
-        + HashToField
-        + Random
-        + From<u64>
-        + CtEq
-        + Read<Cfg = ScalarReadCfg>
-        + Write
-        + FixedSize;
+    type Scalar: FieldNTT + HashToField + Random + From<u64> + CtEq + CodecFixed<Cfg = ()>;
 
     /// The public key type.
     type Public: PairingGroup<Scalar = Self::Scalar, Twin = Self::Signature, Target: Encode>

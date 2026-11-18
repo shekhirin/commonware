@@ -131,7 +131,6 @@ use crate::{
     bls::{
         key::Private,
         sharing::{Mode, ModeVersion, Share, Sharing},
-        variant::ScalarReadCfg,
     },
     bls12381::primitives::{
         group::{G1, Scalar, SmallScalar},
@@ -894,11 +893,7 @@ impl Read for Dealing {
         let poly = Read::read_cfg(buf, &(RangeCfg::from(NZU32!(1)..=*max_players), ()))?;
         let masked_shares = Read::read_cfg(
             buf,
-            &(
-                RangeCfg::new(0..=max_players.get() as usize),
-                (),
-                ScalarReadCfg::AllowZero,
-            ),
+            &(RangeCfg::new(0..=max_players.get() as usize), (), ()),
         )?;
         Ok(Self {
             nonce,

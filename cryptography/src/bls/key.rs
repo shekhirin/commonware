@@ -1,10 +1,9 @@
 //! Secret keys.
 
-use super::variant::ScalarReadCfg;
 use crate::Secret;
 use bytes::BufMut;
 use commonware_codec::{Buf, Error, FixedSize, Read, Write};
-use commonware_math::algebra::Random;
+use commonware_math::algebra::{Additive, Random};
 use core::fmt::{Debug, Formatter};
 use ctutils::CtEq;
 use rand_core::CryptoRng;
@@ -60,12 +59,27 @@ impl<S: Write> Write for Private<S> {
     }
 }
 
-impl<S: Read<Cfg = ScalarReadCfg>> Read for Private<S> {
+/// Reads a scalar and rejects zero, which is not a valid secret.
+///
+/// This preserves the IETF BLS requirement that secret keys are nonzero:
+/// <https://datatracker.ietf.org/doc/html/draft-irtf-cfrg-bls-signature-05#section-2.3>
+pub(crate) fn read_nonzero<S: Read<Cfg = ()> + Additive + CtEq>(
+    buf: &mut impl Buf,
+) -> Result<Secret<S>, Error> {
+    let scalar = Secret::new(S::read_cfg(buf, &())?);
+    if scalar.expose(|scalar| bool::from(scalar.ct_eq(&S::zero()))) {
+        return Err(Error::Invalid("Private", "zero scalar"));
+    }
+    Ok(scalar)
+}
+
+impl<S: Read<Cfg = ()> + Additive + CtEq> Read for Private<S> {
     type Cfg = ();
 
     fn read_cfg(buf: &mut impl Buf, _: &()) -> Result<Self, Error> {
-        let scalar = S::read_cfg(buf, &ScalarReadCfg::RejectZero)?;
-        Ok(Self::new(scalar))
+        Ok(Self {
+            scalar: read_nonzero(buf)?,
+        })
     }
 }
 

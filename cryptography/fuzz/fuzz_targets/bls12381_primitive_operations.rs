@@ -1,14 +1,9 @@
 #![no_main]
 
 use arbitrary::{Arbitrary, Unstructured};
-use commonware_codec::{Copying, Encode, Read, ReadExt};
+use commonware_codec::{Copying, Encode, ReadExt};
 use commonware_cryptography::{
-    bls::{
-        key::Private,
-        ops,
-        sharing::Share,
-        variant::{ScalarReadCfg, Variant},
-    },
+    bls::{key::Private, ops, sharing::Share, variant::Variant},
     bls12381::primitives::{
         group::{G1, G1_MESSAGE, G2, G2_MESSAGE, Scalar},
         variant::{MinPk, MinSig},
@@ -609,11 +604,9 @@ fn fuzz(op: FuzzOperation) {
         }
 
         FuzzOperation::SerializeScalar { scalar } => {
-            if let Ok(decoded) =
-                Scalar::read_cfg(&mut scalar.encode_mut(), &ScalarReadCfg::RejectZero)
-            {
-                assert_eq!(scalar, decoded);
-            }
+            let decoded =
+                Scalar::read(&mut scalar.encode_mut()).expect("canonical scalar must decode");
+            assert_eq!(scalar, decoded);
         }
 
         FuzzOperation::SerializeG1 { point } => {

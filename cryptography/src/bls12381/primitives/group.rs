@@ -13,7 +13,7 @@
 //! group operations can still be the identity, so an API that treats it as invalid must reject it
 //! at its own boundary.
 
-use crate::bls::variant::{DST, ScalarReadCfg};
+use crate::bls::variant::DST;
 #[cfg(not(feature = "std"))]
 use alloc::{vec, vec::Vec};
 use blst::{
@@ -723,17 +723,12 @@ impl Write for Scalar {
 }
 
 impl Read for Scalar {
-    type Cfg = ScalarReadCfg;
+    type Cfg = ();
 
-    fn read_cfg(buf: &mut impl Buf, cfg: &ScalarReadCfg) -> Result<Self, Error> {
+    fn read_cfg(buf: &mut impl Buf, _: &()) -> Result<Self, Error> {
         let bytes = Zeroizing::new(<[u8; Self::SIZE]>::read(buf)?);
         let mut ret = blst_fr::default();
         // SAFETY: bytes is a valid 32-byte array. blst_scalar_fr_check validates in-range.
-        //
-        // For private key material, callers pass `RejectZero` to preserve the
-        // IETF BLS non-zero secret-key requirement:
-        // * https://datatracker.ietf.org/doc/html/draft-irtf-cfrg-bls-signature-03#section-2.3
-        // * https://datatracker.ietf.org/doc/html/draft-irtf-cfrg-bls-signature-04#section-2.3
         unsafe {
             let mut scalar = blst_scalar::default();
             blst_scalar_from_bendian(&mut scalar, bytes.as_ptr());
@@ -742,11 +737,7 @@ impl Read for Scalar {
             }
             blst_fr_from_scalar(&mut ret, &scalar);
         }
-        let out = Self(ret);
-        if *cfg == ScalarReadCfg::RejectZero && out == Self::zero() {
-            return Err(Invalid("Scalar", "Invalid"));
-        }
-        Ok(out)
+        Ok(Self(ret))
     }
 }
 
@@ -1969,7 +1960,7 @@ mod tests {
         bls::{key::Private, sharing::Share},
         bls12381::primitives::group::Scalar,
     };
-    use commonware_codec::{Copying, Decode, DecodeExt, Encode, EncodeFixed};
+    use commonware_codec::{Copying, DecodeExt, Encode, EncodeFixed};
     use commonware_invariants::minifuzz;
     use commonware_macros::test_group;
     use commonware_math::algebra::{Random, test_suites};
@@ -2090,19 +2081,14 @@ mod tests {
         let original = Scalar::random(test_rng());
         let mut encoded = original.encode();
         assert_eq!(encoded.len(), Scalar::SIZE);
-        let decoded = Scalar::decode_cfg(&mut encoded, &ScalarReadCfg::RejectZero).unwrap();
+        let decoded = Scalar::decode(&mut encoded).unwrap();
         assert_eq!(original, decoded);
     }
 
     #[test]
-    fn test_scalar_codec_zero_cfg() {
+    fn test_scalar_codec_zero() {
         let encoded = Scalar::zero().encode();
-
-        assert_eq!(
-            Scalar::decode_cfg(encoded.clone(), &ScalarReadCfg::AllowZero).unwrap(),
-            Scalar::zero()
-        );
-        assert!(Scalar::decode_cfg(encoded, &ScalarReadCfg::RejectZero).is_err());
+        assert_eq!(Scalar::decode(encoded).unwrap(), Scalar::zero());
     }
 
     #[test]
@@ -2166,23 +2152,17 @@ mod tests {
     }
 
     #[test]
-    fn test_scalar_read_cfg_accepts_canonical_zero() {
+    fn test_scalar_read_accepts_canonical_zero() {
         // Round-trips canonical encodings, including zero.
         let s = Scalar::random(test_rng());
         let bytes = s.encode_fixed::<{ Scalar::SIZE }>();
+        assert_eq!(Scalar::decode(Copying(&bytes)).unwrap(), s);
         assert_eq!(
-            Scalar::decode_cfg(Copying(&bytes), &ScalarReadCfg::AllowZero).unwrap(),
-            s
-        );
-        assert_eq!(
-            Scalar::decode_cfg(Copying(&[0u8; Scalar::SIZE]), &ScalarReadCfg::AllowZero).unwrap(),
+            Scalar::decode(Copying(&[0u8; Scalar::SIZE])).unwrap(),
             Scalar::zero()
         );
         // Non-canonical encodings (>= r) are rejected.
-        assert!(
-            Scalar::decode_cfg(Copying(&[0xffu8; Scalar::SIZE]), &ScalarReadCfg::AllowZero)
-                .is_err()
-        );
+        assert!(Scalar::decode(Copying(&[0xffu8; Scalar::SIZE])).is_err());
     }
 
     #[test]

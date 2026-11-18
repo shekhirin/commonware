@@ -1,5 +1,4 @@
 use crate::{
-    bls::variant::ScalarReadCfg,
     bls12381::primitives::group::Scalar,
     zk::circuit::{BoolVar, Context, Selector, Var},
 };
@@ -792,7 +791,7 @@ impl Read for G {
     type Cfg = ();
 
     fn read_cfg(buf: &mut impl Buf, _: &()) -> Result<Self, CodecError> {
-        let x = Scalar::read_cfg(buf, &ScalarReadCfg::AllowZero).map_err(|err| match err {
+        let x = Scalar::read(buf).map_err(|err| match err {
             CodecError::Invalid(..) => {
                 CodecError::Invalid("Banderwagon", "x not a canonical field element")
             }
